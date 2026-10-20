@@ -138,6 +138,7 @@ export function useTradingData() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [mt5Account, setMt5Account] = useState<MT5AccountStatus | null>(null);
   const [tradingMode, setTradingMode] = useState<'DEMO' | 'REAL'>('DEMO');
+  const [activeAssets, setActiveAssets] = useState<string[]>(['BTCUSD', 'ETHUSD', 'SOLUSD', 'XAUUSD']);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
@@ -179,6 +180,9 @@ export function useTradingData() {
 
       if (!configErr && configData && configData.length > 0) {
         setTradingMode(String(configData[0].trading_mode).toUpperCase() === 'REAL' ? 'REAL' : 'DEMO');
+        if (configData[0].active_assets && Array.isArray(configData[0].active_assets)) {
+          setActiveAssets(configData[0].active_assets);
+        }
       }
 
       setError(null);
@@ -240,6 +244,9 @@ export function useTradingData() {
           if (payload.new) {
             const cfg = payload.new as any;
             setTradingMode(String(cfg.trading_mode).toUpperCase() === 'REAL' ? 'REAL' : 'DEMO');
+            if (cfg.active_assets && Array.isArray(cfg.active_assets)) {
+              setActiveAssets(cfg.active_assets);
+            }
           }
         }
       )
@@ -263,6 +270,22 @@ export function useTradingData() {
       return true;
     } catch (err) {
       console.error('Erro ao atualizar system_config:', err);
+      return false;
+    }
+  }, []);
+
+  // Função para atualizar active_assets no Supabase
+  const updateActiveAssets = useCallback(async (newAssets: string[]) => {
+    try {
+      const { error } = await supabase
+        .from('system_config')
+        .update({ active_assets: newAssets, updated_at: new Date().toISOString() })
+        .eq('id', 1);
+      if (error) throw error;
+      setActiveAssets(newAssets);
+      return true;
+    } catch (err) {
+      console.error('Erro ao atualizar active_assets no Supabase:', err);
       return false;
     }
   }, []);
@@ -393,6 +416,8 @@ export function useTradingData() {
     mt5Account,
     tradingMode,
     setSystemTradingMode,
+    activeAssets,
+    updateActiveAssets,
     agentPerformance,
     getAgentPerformance,
     timelineData,

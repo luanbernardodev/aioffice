@@ -38,6 +38,7 @@ export interface MT5AccountStatus {
 export interface SystemConfig {
   id: number;
   trading_mode: 'DEMO' | 'REAL' | string;
+  active_assets?: string[];
   updated_at?: string;
 }
 

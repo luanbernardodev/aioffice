@@ -7,6 +7,7 @@ import pandas as pd
 
 from config import settings
 from core.mt5_bridge import MT5Bridge
+from core import derivatives_collector
 
 log = logging.getLogger("sentinel")
 
@@ -196,24 +197,57 @@ def _check_gamma(df: pd.DataFrame) -> Optional[str]:
     return None
 
 
-def _check_delta(df: pd.DataFrame) -> Optional[str]:
-    """SMC Scalper: Varredura de liquidez (sweep) do swing recente confirmada pelo Triple Check."""
-    if len(df) < 30:
-        return None
-    swing = df.iloc[-23:-3]
-    swing_low, swing_high = swing["low"].min(), swing["high"].max()
+def check_delta_strategy(df: pd.DataFrame, symbol: str = "BTCUSD") -> Tuple[bool, Optional[str]]:
+    """Avaliação quantitativa condicional da estratégia Agente Delta V2:
+    - Cripto (BTC, ETH, SOL): Coletor de derivativos Binance Futures (Funding Rate) + RSI < 20 + Volume Spike > 1.5.
+    - Ouro/Forex (XAUUSD, etc.): SMC Tradicional (RSI < 20 + ADX > 25 + Volume Spike > 1.5).
+    """
+    if len(df) < 20:
+        return False, None
+    c = df.iloc[-1]
+    rsi_val = float(c["rsi"]) if "rsi" in c and not pd.isna(c["rsi"]) else 50.0
+    adx_val = float(c["adx"]) if "adx" in c and not pd.isna(c["adx"]) else 0.0
+    volume_spike = float(c["vol_ratio"]) if "vol_ratio" in c and not pd.isna(c["vol_ratio"]) else 1.0
 
-    # Sweep de Fundo (Liquidez abaixo de swing_low)
-    if (df["low"].iloc[-3:] < swing_low).any():
-        ok, _, _ = check_indecision_filters(df, "BUY")
-        if ok:
-            return "BUY"
+    if symbol in ["BTCUSD", "ETHUSD", "SOLUSD"]:
+        # É Cripto! Invoca o coletor de derivativos
+        deriv_data = derivatives_collector.get_crypto_derivatives(symbol)
+        # Se RSI < 20 (Exaustão) + Volume Spike + Funding Rate muito positivo (Retalho alavancado em Long)
+        if rsi_val < 20 and volume_spike > 1.5 and deriv_data.get("is_euphoric"):
+            return True, "Gatilho de Liquidation Sweep (Squeeze Institucional)"
+    else:
+        # É Ouro ou Forex! Mantém a estratégia SMC tradicional (FVG + Order Block + Triple Check)
+        if rsi_val < 20 and adx_val > 25 and volume_spike > 1.5:
+            return True, "SMC Clássico"
 
-    # Sweep de Topo (Liquidez acima de swing_high)
-    if (df["high"].iloc[-3:] > swing_high).any():
-        ok, _, _ = check_indecision_filters(df, "SELL")
-        if ok:
-            return "SELL"
+    return False, None
+
+
+def _check_delta(df: pd.DataFrame, symbol: str = "BTCUSD") -> Optional[str]:
+    """SMC Scalper / Liquidation Sweep (Agente Delta V2):
+    Varredura de liquidez com desvio condicional Cripto vs Forex/Ouro.
+    """
+    triggered, reason = check_delta_strategy(df, symbol=symbol)
+    if triggered:
+        log.info("[Ops Delta] %s disparou: %s", symbol, reason)
+        return "BUY"
+
+    # Sweep de Fundo/Topo clássico como confluência de scalper
+    if len(df) >= 30:
+        swing = df.iloc[-23:-3]
+        swing_low, swing_high = swing["low"].min(), swing["high"].max()
+
+        # Sweep de Fundo (Liquidez abaixo de swing_low)
+        if (df["low"].iloc[-3:] < swing_low).any():
+            ok, _, _ = check_indecision_filters(df, "BUY")
+            if ok:
+                return "BUY"
+
+        # Sweep de Topo (Liquidez acima de swing_high)
+        if (df["high"].iloc[-3:] > swing_high).any():
+            ok, _, _ = check_indecision_filters(df, "SELL")
+            if ok:
+                return "SELL"
     return None
 
 
@@ -360,7 +394,10 @@ class Sentinel:
             if df is None:
                 continue
             candle_time = str(df.iloc[-1]["time"])
-            bias = check(df)
+            try:
+                bias = check(df, symbol=symbol)
+            except TypeError:
+                bias = check(df)
 
             # Heartbeat Verbose Logging: Imprime distância do preço para o gatilho se VERBOSE_LOGS=True
             if getattr(settings, "VERBOSE_LOGS", True):
@@ -411,9 +448,15 @@ class Sentinel:
             dist_high = ((swing_high - price) / price) * 100
             min_dist = min(abs(dist_low), abs(dist_high))
             if bias:
-                log.info("[Ops Delta] %s SWEEP DETECTADO! Bias=%s (Preço: %.2f) -> Disparando", symbol, bias, price)
+                log.info("[Ops Delta] %s GATILHO DETECTADO! Bias=%s (Preço: %.2f) -> Disparando", symbol, bias, price)
             else:
-                log.info("[Ops Delta] %s aguardando Sweep (Falta %.2f%% para o fundo/topo) -> Abortado", symbol, min_dist)
+                if symbol in ["BTCUSD", "ETHUSD", "SOLUSD"]:
+                    deriv = derivatives_collector.get_crypto_derivatives(symbol)
+                    fr = deriv.get("funding_rate", 0.0)
+                    log.info("[Ops Delta] %s Cripto Derivativos (Funding: %.6f | Euforia: %s | RSI: %.1f) -> Abortado",
+                             symbol, fr, deriv.get("is_euphoric"), float(c.get("rsi") or 50.0))
+                else:
+                    log.info("[Ops Delta] %s SMC Clássico (Falta %.2f%% para o fundo/topo) -> Abortado", symbol, min_dist)
 
         elif strategy == "ops_alpha":
             ema20 = float(c["ema20"])
@@ -456,9 +499,21 @@ class Sentinel:
                          symbol, dist_vwap, vol_ratio)
 
     def scan_all(self, active_agents: Optional[Dict[str, str]] = None,
-                 agent_params: Optional[Dict[str, dict]] = None) -> List[dict]:
+                 agent_params: Optional[Dict[str, dict]] = None,
+                 active_assets: Optional[List[str]] = None) -> List[dict]:
+        """Varre exclusivamente os ativos selecionados dinamicamente no system_config da UI."""
+        if active_assets is None:
+            if self.db:
+                try:
+                    cfg = self.db.get_system_config()
+                    active_assets = cfg.get("active_assets")
+                except Exception as exc:
+                    log.warning("Falha ao obter active_assets em scan_all: %s", exc)
+            if not active_assets:
+                active_assets = settings.SYMBOLS
+
         found: List[dict] = []
-        for symbol in settings.SYMBOLS:
+        for symbol in active_assets:
             try:
                 found.extend(self.scan_symbol(symbol, active_agents, agent_params=agent_params))
             except Exception as exc:  # noqa: BLE001

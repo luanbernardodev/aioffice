@@ -91,9 +91,14 @@ class QuantOffice:
                     log.warning("[LOOP 1 - GESTÃO DE RISCO] %s",
                                 json.dumps(event, ensure_ascii=False, default=str))
 
-                # 5. Sentinela varre simultaneamente todos os ativos para todos os 5 operadores
+                # 5. Leitura Dinâmica de Ativos: Sentinela varre EXCLUSIVAMENTE os ativos ativados na UI
+                sys_cfg = self.db.get_system_config()
+                active_assets = sys_cfg.get("active_assets")
+                if not isinstance(active_assets, list) or len(active_assets) == 0:
+                    active_assets = settings.SYMBOLS
+
                 active_agents = {a["agent_id"]: strategy_of(a) for a in self.db.get_active_ops_agents()}
-                triggers = self.sentinel.scan_all(active_agents)
+                triggers = self.sentinel.scan_all(active_agents, active_assets=active_assets)
 
                 if triggers:
                     log.info("[LOOP 1] Sentinela identificou %d setup(s) quantitativo(s):", len(triggers))
@@ -117,7 +122,9 @@ class QuantOffice:
                     s3_veto = "Ativo" if has_veto else "Inativo"
 
                     price_parts = []
-                    for sym, label in [("BTCUSD", "BTC"), ("ETHUSD", "ETH"), ("SOLUSD", "SOL"), ("XAUUSD", "XAU")]:
+                    asset_labels = {"BTCUSD": "BTC", "ETHUSD": "ETH", "SOLUSD": "SOL", "XAUUSD": "XAU"}
+                    for sym in active_assets:
+                        label = asset_labels.get(sym, sym)
                         try:
                             p = self.bridge.get_price(sym, "BUY")
                             price_parts.append(f"{label} {p:.0f}" if p >= 100 else f"{label} {p:.2f}")

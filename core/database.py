@@ -386,14 +386,18 @@ class DatabaseManager:
 
     # ------------------------------------------------------------ system_config
     def get_system_config(self) -> dict:
-        """Obtém configuração global do sistema (trading_mode: 'DEMO' | 'REAL')."""
+        """Obtém configuração global do sistema (trading_mode: 'DEMO' | 'REAL', active_assets: list)."""
+        default_assets = ["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD"]
         try:
             rows = self._select("system_config", eq={"id": 1}, limit=1)
             if rows:
-                return rows[0]
+                cfg = rows[0]
+                if not cfg.get("active_assets"):
+                    cfg["active_assets"] = default_assets
+                return cfg
         except Exception as exc:
             log.warning("get_system_config falhou: %s", exc)
-        return {"id": 1, "trading_mode": "DEMO"}
+        return {"id": 1, "trading_mode": "DEMO", "active_assets": default_assets}
 
     def set_system_config(self, trading_mode: str) -> bool:
         """Atualiza o trading_mode global ('DEMO' ou 'REAL')."""
@@ -404,6 +408,16 @@ class DatabaseManager:
             return True
         except Exception as exc:
             log.error("set_system_config falhou: %s", exc)
+            return False
+
+    def set_active_assets(self, assets: list) -> bool:
+        """Atualiza a lista de ativos monitorados pelo Sentinela em system_config."""
+        try:
+            self._upsert("system_config", {"id": 1, "active_assets": assets, "updated_at": _now()}, "id")
+            log.info("[SYSTEM CONFIG] active_assets atualizado para %s", assets)
+            return True
+        except Exception as exc:
+            log.error("set_active_assets falhou: %s", exc)
             return False
 
     # ------------------------------------------------------------ mt5_account_status

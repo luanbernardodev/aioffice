@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { AgentStatus, MarketContext, Trade } from '@/types';
 import { supabase } from '@/lib/supabase';
+import { AssetSelector } from '@/components/AssetSelector';
 
 interface CommandHUDProps {
   agents: AgentStatus[];
@@ -160,6 +161,13 @@ export const CommandHUD: React.FC<CommandHUDProps> = ({
 
   return (
     <div className="absolute inset-0 pointer-events-none select-none z-40">
+      {/* ========================================================= */}
+      {/* PAINEL DE CONTROLO DE ATIVOS (CABEÇALHO CENTRAL / DOCK)   */}
+      {/* ========================================================= */}
+      <div className="fixed top-3 left-1/2 -translate-x-1/2 z-50 pointer-events-auto">
+        <AssetSelector />
+      </div>
+
       {/* ========================================================= */}
       {/* 1. TOP-RIGHT COMPACT FLOATING PILL / DOCK                 */}
       {/* ========================================================= */}
