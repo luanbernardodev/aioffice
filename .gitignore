@@ -1,0 +1,7 @@
+.env*
+!.env.example
+__pycache__/
+*.pyc
+.system_generated/
+*.log
+.DS_Store

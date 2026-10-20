@@ -1,0 +1,10 @@
+anthropic
+supabase
+MetaTrader5
+pandas
+numpy
+python-dotenv
+feedparser
+requests
+schedule
+tzdata
