@@ -103,8 +103,8 @@ def resolve_symbol(symbol: str) -> str:
 
 class MT5Bridge:
 
-    def __init__(self) -> None:
-        self.mock = True
+    def __init__(self, mock: Optional[bool] = None) -> None:
+        self.mock = bool(mock) if mock is not None else (settings.DRY_RUN or mt5 is None)
         self.connected = False
         self.demo_login = settings.MT5_LOGIN_DEMO
         self.demo_password = settings.MT5_PASSWORD_DEMO
@@ -112,7 +112,8 @@ class MT5Bridge:
         self.real_login = settings.MT5_LOGIN_REAL
         self.real_password = settings.MT5_PASSWORD_REAL
         self.real_server = settings.MT5_SERVER_REAL
-        self.ensure_connection()
+        if not self.mock:
+            self.ensure_connection()
 
     def login_account(self, login: int, password: str, server: str, timeout: int = 15000) -> bool:
         """Alterna a conta ativa do MT5 dinamicamente com tratamento seguro de erro e reconnect."""
@@ -1007,9 +1008,14 @@ class MT5Bridge:
                         "execution_account": exec_acc,
                     })
 
-                    # Atualiza imediatamente o PnL acumulado do agente no Supabase
+                    # Atualiza imediatamente o PnL acumulado do agente no Supabase e o ciclo do Setor 3
                     if is_new_close and agent_id:
                         db.add_agent_profit(agent_id, profit)
+                        try:
+                            from core import continuous_learning
+                            continuous_learning.record_trade_closure(db, getattr(db, "claude", None), agent_id, profit, symbol=d.symbol)
+                        except Exception as cycle_err:
+                            log.warning("Falha ao registrar ciclo de aprendizagem no MT5 Deal: %s", cycle_err)
 
                     # Saída da Quarentena por Mérito (se acertou trade em Shadow Trading)
                     if profit > 0 and agent_id:

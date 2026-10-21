@@ -10,9 +10,20 @@ export interface AgentStatus {
   allocation_weight: number;
   updated_at?: string;
   total_profit?: number;
+  total_pnl?: number;
   pnl?: number;
   consecutive_losses?: number;
   quarantine_until?: string | null;
+}
+
+export interface AgentLearning {
+  id: number;
+  agent_id: string;
+  symbol: string;
+  cycle_loss: number;
+  technical_failure: string;
+  vaccine_rule: Record<string, any>;
+  created_at: string;
 }
 
 export interface MarketContext {

@@ -162,12 +162,12 @@ export function useTradingData() {
       // Busca dados de PnL consolidados de agents_status
       const { data: agentsData } = await supabase
         .from('agents_status')
-        .select('agent_id, total_profit, pnl');
+        .select('agent_id, total_profit, total_pnl, pnl');
 
       if (agentsData && Array.isArray(agentsData)) {
         const pMap: Record<string, number> = {};
         agentsData.forEach((ag: any) => {
-          const val = ag.total_profit ?? ag.pnl;
+          const val = ag.total_pnl ?? ag.total_profit ?? ag.pnl;
           if (val !== undefined && val !== null && ag.agent_id) {
             pMap[ag.agent_id] = Number(val);
             pMap[ag.agent_id.replace(/^ops_/, '')] = Number(val);
@@ -252,7 +252,7 @@ export function useTradingData() {
         (payload) => {
           if (payload.new) {
             const ag = payload.new as any;
-            const val = ag.total_profit ?? ag.pnl;
+            const val = ag.total_pnl ?? ag.total_profit ?? ag.pnl;
             if (val !== undefined && val !== null && ag.agent_id) {
               setAgentPnLMap((prev) => ({
                 ...prev,

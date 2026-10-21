@@ -546,17 +546,15 @@ export const VoxelAgent: React.FC<VoxelAgentProps> = ({
 
   const [hovered, setHovered] = useState(false);
 
-  // Dynamic Real Net PnL from trades_history (filtering strictly status === 'CLOSED')
+  // Dynamic Real Net PnL from Supabase (total_pnl, total_profit, pnl) or trades_history
   const agentPnL = useMemo(() => {
-    // 1. Prioridade máxima: valor da coluna do Supabase (total_profit ou pnl)
-    if (agent.total_profit !== undefined && agent.total_profit !== null && !isNaN(Number(agent.total_profit))) {
-      return Number(agent.total_profit);
-    }
-    if (agent.pnl !== undefined && agent.pnl !== null && !isNaN(Number(agent.pnl))) {
-      return Number(agent.pnl);
+    // 1. Prioridade máxima: valor da coluna do Supabase (total_pnl, total_profit ou pnl)
+    const rawVal = (agent as any).total_pnl ?? agent.total_profit ?? agent.pnl;
+    if (rawVal !== undefined && rawVal !== null && !isNaN(Number(rawVal))) {
+      return Number(rawVal);
     }
     return getAgentNetPnL(trades, agent.agent_id);
-  }, [trades, agent.agent_id, agent.total_profit, agent.pnl]);
+  }, [trades, agent.agent_id, (agent as any).total_pnl, agent.total_profit, agent.pnl]);
 
   const pnlFormatting = useMemo(() => {
     return formatPnL(agentPnL);
@@ -608,12 +606,10 @@ export const VoxelAgent: React.FC<VoxelAgentProps> = ({
 
     // Para todos os agentes operadores, o Net PnL é OBRIGATÓRIO e prioritário na pílula 3D
     if (isOps) {
-      // 1. Prioridade máxima: coluna total_profit ou pnl diretamente do Supabase no objeto agent
-      const hasSupabasePnL = (agent.total_profit !== undefined && agent.total_profit !== null) ||
-                             (agent.pnl !== undefined && agent.pnl !== null);
-      const supabaseVal = agent.total_profit !== undefined && agent.total_profit !== null
-        ? Number(agent.total_profit)
-        : Number(agent.pnl ?? 0);
+      // 1. Prioridade máxima: coluna total_pnl, total_profit ou pnl diretamente do Supabase no objeto agent
+      const rawSupabaseVal = (agent as any).total_pnl ?? agent.total_profit ?? agent.pnl;
+      const hasSupabasePnL = rawSupabaseVal !== undefined && rawSupabaseVal !== null;
+      const supabaseVal = Number(rawSupabaseVal ?? 0);
 
       const perf =
         agentPerformance?.[agent.agent_id] ||

@@ -213,7 +213,12 @@ class DatabaseManager:
 
     def get_ops_agent_ids(self) -> List[str]:
         """Operadores do Setor 1 ainda empregados (inclui clones, exclui demitidos)."""
-        return [r["agent_id"] for r in self.get_ops_agents()]
+        agents = [r["agent_id"] for r in self.get_ops_agents()]
+        standard = ["ops_alpha", "ops_beta", "ops_gamma", "ops_delta", "ops_epsilon"]
+        for s in standard:
+            if s not in agents:
+                agents.append(s)
+        return agents
 
     def get_active_ops_agents(self) -> List[dict]:
         """Agentes do setor 1 aptos a operar (inclui agentes em quarentena operando em Shadow Trading/Demo).
@@ -399,6 +404,32 @@ class DatabaseManager:
             log.warning("get_system_config falhou: %s", exc)
         return {"id": 1, "trading_mode": "DEMO", "active_assets": default_assets}
 
+    def get_active_assets(self) -> List[str]:
+        """SELECT rápido de active_assets em system_config a cada varredura."""
+        default_assets = ["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD"]
+        try:
+            if self.client:
+                res = self.client.table("system_config").select("active_assets").eq("id", 1).limit(1).execute()
+                if res.data and len(res.data) > 0:
+                    assets = res.data[0].get("active_assets")
+                    if isinstance(assets, list) and len(assets) > 0:
+                        return assets
+            else:
+                cfg = self.get_system_config()
+                if cfg.get("active_assets") and isinstance(cfg["active_assets"], list):
+                    return cfg["active_assets"]
+        except Exception as exc:
+            log.warning("get_active_assets rápido falhou: %s", exc)
+        return default_assets
+
+    def save_agent_learning(self, record: dict) -> dict:
+        """Salva registro de diagnóstico técnico e vacina na tabela agent_learning."""
+        try:
+            return self._insert("agent_learning", record)
+        except Exception as exc:
+            log.error("save_agent_learning falhou: %s", exc)
+            return record
+
     def set_system_config(self, trading_mode: str) -> bool:
         """Atualiza o trading_mode global ('DEMO' ou 'REAL')."""
         mode = "REAL" if str(trading_mode).upper() == "REAL" else "DEMO"
@@ -516,6 +547,7 @@ class DatabaseManager:
 
             self._update("agents_status", {
                 "total_profit": new_agent_profit,
+                "total_pnl": new_agent_profit,
                 "pnl": new_agent_profit,
                 "updated_at": _now(),
             }, {"agent_id": agent_id})
@@ -552,10 +584,9 @@ class DatabaseManager:
             reason = "SL_HIT"
 
         aid = agent_id
-        if not aid:
-            existing = self._select("trades_history", eq={"ticket_mt5": trade_id}, limit=1)
-            if existing:
-                aid = existing[0].get("agent_id")
+        existing = self._select("trades_history", eq={"ticket_mt5": trade_id}, limit=1)
+        if not aid and existing:
+            aid = existing[0].get("agent_id")
 
         self._update("trades_history", {
             "status": "CLOSED", "profit_usd": pnl, "close_price": exit_price,
@@ -563,9 +594,15 @@ class DatabaseManager:
         }, {"ticket_mt5": trade_id})
         log.info("Trade %s fechado por %s (%s): %.2f", trade_id, outcome, reason, pnl)
 
-        # Atualização imediata do PnL do agente no Supabase
+        # Atualização imediata do PnL do agente no Supabase e disparo do rastreador de ciclos do Setor 3
         if aid:
             self.add_agent_profit(aid, pnl)
+            try:
+                from core import continuous_learning
+                sym = existing[0].get("symbol") if existing else "BTCUSD"
+                continuous_learning.record_trade_closure(self, getattr(self, "claude", None), aid, pnl, symbol=sym or "BTCUSD")
+            except Exception as ml_err:
+                log.warning("Falha ao registrar ciclo contínuo de aprendizado: %s", ml_err)
 
     def get_trades_last_24h(self) -> List[dict]:
         since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()

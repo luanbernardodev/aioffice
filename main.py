@@ -108,11 +108,13 @@ class QuantOffice:
                     log.warning("[LOOP 1 - GESTÃO DE RISCO] %s",
                                 json.dumps(event, ensure_ascii=False, default=str))
 
-                # 5. Leitura Dinâmica de Ativos: Sentinela varre EXCLUSIVAMENTE os ativos ativados na UI
-                sys_cfg = self.db.get_system_config()
-                active_assets = sys_cfg.get("active_assets")
-                if not isinstance(active_assets, list) or len(active_assets) == 0:
-                    active_assets = settings.SYMBOLS
+                # 5. Leitura Dinâmica de Ativos: SELECT rápido em system_config a cada varredura (Controle Remoto da UI)
+                active_assets = self.db.get_active_assets()
+                all_known_symbols = list(dict.fromkeys(settings.SYMBOLS + ["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD"]))
+                ignored_assets = [s for s in all_known_symbols if s not in active_assets]
+                if ignored_assets:
+                    log.info("[SENTINELA] Varredura rápida: Ativos ativos: %s | Desativados pelo usuário (ignorando imediatamente): %s",
+                             active_assets, ignored_assets)
 
                 active_agents = {a["agent_id"]: strategy_of(a) for a in self.db.get_active_ops_agents()}
                 triggers = self.sentinel.scan_all(active_agents, active_assets=active_assets)

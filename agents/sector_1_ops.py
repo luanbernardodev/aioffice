@@ -250,11 +250,13 @@ def execute_autonomous_trigger(trigger: Dict[str, Any], db: DatabaseManager,
         final_sl = float(order.get("sl") or sl)
         final_tp = float(order.get("tp") or 0.0)
 
-        # Registro na tabela trades_history com o sentimento das notícias em market_context
+        # Registro na tabela trades_history com o motivo institucional de Liquidity Sweep (SMC)
+        vol_str = f"{trigger.get('vol_ratio', 1.3):.1f}x" if trigger.get('vol_ratio') else "1.3x"
+        smc_rationale = trigger.get("rationale") or f"False Breakout - Liquidity Sweep (Volume: {vol_str})"
         db.log_trade(
             agent_id, symbol, action, sizing["volume"], order.get("price", entry),
             final_sl, final_tp, sizing["risk_amount"], confidence=95,
-            rationale=f"Gatilho Autônomo Matemático {trigger.get('trigger')} (M{trigger.get('timeframe')}) [{exec_acc}]",
+            rationale=smc_rationale,
             ticket=ticket, dry_run=bool(order.get("mock")), execution_account=exec_acc,
             market_context=market_context_str
         )

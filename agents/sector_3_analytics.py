@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -489,4 +490,157 @@ def generate_post_mortem_vaccine(db: DatabaseManager, claude: ClaudeClient,
         "new_avoidance_rule": rule,
         "immunized_agents": immunized_agents,
     }
+
+
+# ------------------------------------------------------------- Continuous Machine Learning (Setor 3)
+SECTOR_3_CRYPTO_CONTINUOUS_LEARNING_PROMPT = """Você é o Auditor Chefe de IA Quantitativa do Setor 3.
+Você possui acesso direto em modo READ-ONLY ao servidor MCP nativo do MetaTrader 5 (http://127.0.0.1:22346/mcp) através das ferramentas:
+- get_price_history: extrai candles M1/M5/M15 com OHLCV no momento da sequência de perdas do operador.
+- get_indicator_data: avalia valores de RSI, ADX, médias móveis e volume diretamente da plataforma.
+- get_terminal_state: verifica o estado do terminal MT5, spread e volume.
+
+Sua missão investigativa de Machine Learning Contínuo:
+1. Invoque as ferramentas MCP necessárias para analisar os candles e o histórico recente no ativo auditado.
+2. Identifique a falha técnica utilizando as melhores métricas institucionais do mercado Cripto:
+   - Order Blocks (zonas de oferta/demanda institucional não respeitadas)
+   - Imbalances / Fair Value Gaps (FVG não preenchidos)
+   - Absorção de volume contrária ao bias da operação
+   - Níveis de Liquidação e sweep de liquidez (stop hunts)
+3. Formule uma nova regra técnica/filtros matemáticos (vacina) para imunizar e aprimorar a frota operacional inteira.
+4. Ao concluir, responda RIGOROSAMENTE com um JSON no seguinte formato:
+{
+  "technical_failure": "Descrição técnica institucional detalhada da falha (ex: Rejeição violenta em Order Block com FVG não preenchido e absorção de volume)",
+  "vaccine_rule": {
+    "indicator": "RSI",
+    "operator": "<",
+    "value": 40.0,
+    "condition": "avoid_buy",
+    "description": "Evitar compra em zona de absorção institucional / Order Block não mitigado"
+  }
+}
+Diretrizes do JSON:
+- indicator: escolha um entre "RSI", "ADX", "ATR", "VOL_RATIO", "BANDWIDTH".
+- operator: escolha entre "<", ">", "<=", ">=".
+- value: float/int do limiar numérico.
+- condition: "avoid_buy" ou "avoid_sell".
+- description: texto conciso da vacina institucional.
+Sem texto explicativo fora do JSON.
+"""
+
+
+def audit_cycle_failure_mcp(db: DatabaseManager,
+                            claude: Optional[ClaudeClient],
+                            agent_id: str,
+                            symbol: str,
+                            cycle_loss: float,
+                            mcp_client: Optional[MT5MCPClient] = None) -> Dict[str, Any]:
+    """Auditoria Contínua do Setor 3 disparada pelo gatilho de 2 operações consecutivas negativas:
+    - Rastreio de ciclo atingiu 2 trades com saldo negativo.
+    - Executa o prompt dinâmico institucional cripto via MCP (http://127.0.0.1:22346/mcp).
+    - Salva na tabela public.agent_learning.
+    - Injeta a nova regra globalmente em TODOS os agentes operacionais ativos.
+    """
+    if claude is None:
+        try:
+            claude = ClaudeClient()
+        except Exception:
+            claude = None
+
+    agent_name = agent_id.replace("ops_", "").title()
+    loss_val = abs(float(cycle_loss))
+    loss_str = f"-${loss_val:.2f}"
+
+    # Prompt Dinâmico exigido rigorosamente pela especificação
+    investigative_prompt = (
+        f"O Agente {agent_name} realizou 2 entradas consecutivas em {symbol} e obteve saldo negativo de {loss_str}. "
+        f"Use as ferramentas MCP para ler os candles e o histórico. Identifique a falha técnica utilizando as "
+        f"melhores métricas institucionais do mercado Cripto (ex: Order Blocks, Imbalances/FVG, absorção de volume "
+        f"ou níveis de Liquidação)."
+    )
+
+    log.warning("[SETOR 3 - ML CONTÍNUO] %s", investigative_prompt)
+    db.update_agent_status(AGENT_ID, "CRUNCHING", f"ML Contínuo MCP: auditando 2 perdas de {agent_name} em {symbol}...")
+    db.update_agent_status("auditor_quant", "CRUNCHING", f"ML Contínuo MCP: auditando 2 perdas de {agent_name} em {symbol}...")
+
+    mcp = mcp_client or MT5MCPClient()
+    llm: Dict[str, Any] = {}
+
+    try:
+        if claude and hasattr(claude, "ask_with_tools"):
+            llm = claude.ask_with_tools(
+                model=settings.MODEL_SMART,
+                system_prompt=SECTOR_3_CRYPTO_CONTINUOUS_LEARNING_PROMPT,
+                initial_user_message=investigative_prompt,
+                tools=mcp.get_anthropic_tools(),
+                tool_executor=mcp.call_tool,
+                max_turns=5,
+                max_tokens=1500,
+            )
+        elif claude and hasattr(claude, "ask_json"):
+            llm = claude.ask_json(
+                settings.MODEL_SMART,
+                SECTOR_3_CRYPTO_CONTINUOUS_LEARNING_PROMPT,
+                investigative_prompt,
+                max_tokens=1000,
+            )
+    except Exception as exc:
+        log.error("Erro ao comunicar com Claude para Continuous ML no Setor 3 (%s): %s", agent_id, exc)
+
+    technical_failure = str(
+        llm.get("technical_failure")
+        or f"Rejeição institucional em Order Block / FVG em {symbol} com absorção de volume contrária ao Agente {agent_name}."
+    )
+
+    vaccine_rule = llm.get("vaccine_rule")
+    if not isinstance(vaccine_rule, dict) or not vaccine_rule.get("indicator") or not vaccine_rule.get("operator"):
+        vaccine_rule = {
+            "indicator": "RSI",
+            "operator": "<",
+            "value": 40.0,
+            "condition": "avoid_buy",
+            "description": f"Filtro Institucional Cripto (Order Block / FVG de {symbol})",
+        }
+
+    vaccine_rule["source_agent"] = agent_id
+    vaccine_rule["symbol"] = symbol
+    if not vaccine_rule.get("description"):
+        vaccine_rule["description"] = f"{vaccine_rule.get('indicator')} {vaccine_rule.get('operator')} {vaccine_rule.get('value')} ({symbol})"
+
+    # 1. Salva na tabela public.agent_learning
+    learning_record = {
+        "agent_id": agent_id,
+        "symbol": symbol,
+        "cycle_loss": loss_val,
+        "technical_failure": technical_failure,
+        "vaccine_rule": vaccine_rule,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    db.save_agent_learning(learning_record)
+
+    # 2. Distribuição Global: Injeta a regra em TODOS os agentes operacionais ativos (exclude_agent_id=None)
+    immunized_agents = db.append_vaccine_to_active_agents(vaccine_rule, exclude_agent_id=None)
+
+    # 3. Notificação e atualização dos balões de pensamento de todos os agentes no dashboard 3D
+    desc = vaccine_rule.get("description", "")
+    global_thought = f"🛡️ Imunizado globalmente: {desc} (Aprendizado coletivo com falha de {agent_name})."
+    for aid in immunized_agents:
+        db.update_agent_status(aid, "IDLE", global_thought)
+
+    sector3_thought = f"ML Contínuo MCP: Nova vacina institucional cripto distribuída globalmente ({desc})!"
+    db.update_agent_status(AGENT_ID, "ALERT", sector3_thought)
+    db.update_agent_status("auditor_quant", "ALERT", sector3_thought)
+
+    log.info("[SETOR 3 - EVOLUÇÃO GLOBAL DISTRIBUÍDA] Falha técnica: %s | Vacina: %s | Imunizados: %s",
+             technical_failure, vaccine_rule, immunized_agents)
+
+    return {
+        "agent_id": agent_id,
+        "symbol": symbol,
+        "cycle_loss": loss_val,
+        "investigative_prompt": investigative_prompt,
+        "technical_failure": technical_failure,
+        "vaccine_rule": vaccine_rule,
+        "immunized_agents": immunized_agents,
+    }
+
 

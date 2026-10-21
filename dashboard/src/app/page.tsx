@@ -86,34 +86,67 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData();
 
-    // Setup Supabase Realtime Channels para Agents, Trades, MT5 Account e Market Context
+    // Setup Supabase Realtime Channels ('public:agents') para Agents, Trades, MT5 Account e Market Context
     const channel = supabase
-      .channel('quant_office_realtime_main_dashboard')
-      // 1. Ouvir eventos de UPDATE, INSERT, DELETE na tabela de agentes (agents_status)
+      .channel('public:agents')
+      // 1. Escutar eventos de UPDATE na tabela de agentes (agents_status)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'agents_status' },
+        { event: 'UPDATE', schema: 'public', table: 'agents_status' },
         (payload) => {
-          if (payload.eventType === 'INSERT') {
-            const newRow = payload.new as AgentStatus;
-            setAgents((prev) => [...prev.filter((a) => a.agent_id !== newRow.agent_id), newRow]);
-          } else if (payload.eventType === 'UPDATE') {
-            const updatedRow = payload.new as AgentStatus;
-            setAgents((prev) =>
-              prev.map((a) => (a.agent_id === updatedRow.agent_id ? { ...a, ...updatedRow } : a))
-            );
-          } else if (payload.eventType === 'DELETE') {
-            const oldRow = payload.old as AgentStatus;
-            setAgents((prev) => prev.filter((a) => a.agent_id !== oldRow.agent_id));
-          }
+          const updatedRow = payload.new as AgentStatus;
+          setAgents((prev) =>
+            prev.map((a) => {
+              if (a.agent_id === updatedRow.agent_id) {
+                const combined = { ...a, ...updatedRow };
+                const pnlVal = (updatedRow as any).total_pnl ?? updatedRow.total_profit ?? updatedRow.pnl;
+                if (pnlVal !== undefined && pnlVal !== null) {
+                  combined.total_pnl = Number(pnlVal);
+                  combined.total_profit = Number(pnlVal);
+                  combined.pnl = Number(pnlVal);
+                }
+                return combined;
+              }
+              return a;
+            })
+          );
+          // Re-renderização e sincronização imediata de painéis e gráficos
+          refetchTrading();
         }
       )
-      // 2. Ouvir eventos de INSERT e UPDATE na tabela de histórico de ordens (trades_history)
+      // Escutar também novos agentes ou remoções
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'trades_history' },
+        { event: 'INSERT', schema: 'public', table: 'agents_status' },
+        (payload) => {
+          const newRow = payload.new as AgentStatus;
+          setAgents((prev) => [...prev.filter((a) => a.agent_id !== newRow.agent_id), newRow]);
+          refetchTrading();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'agents_status' },
+        (payload) => {
+          const oldRow = payload.old as AgentStatus;
+          setAgents((prev) => prev.filter((a) => a.agent_id !== oldRow.agent_id));
+        }
+      )
+      // 2. Escutar eventos de INSERT na tabela de histórico de ordens (trades_history)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'trades_history' },
         () => {
-          // Reação instantânea: atualiza trades e histórico de ordens fechadas pela VPS
+          // Reação instantânea: atualiza trades, PnL e Equity da VPS imediatamente
+          refetchTrading();
+          fetchData();
+        }
+      )
+      // Escutar também eventos de UPDATE em trades_history (fechamento de ordens em andamento)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'trades_history' },
+        () => {
           refetchTrading();
           fetchData();
         }
@@ -126,7 +159,16 @@ export default function DashboardPage() {
           refetchTrading();
         }
       )
-      // 4. Market Context Table Changes
+      // 4. Ouvir novos aprendizados do Setor 3 (agent_learning)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'agent_learning' },
+        () => {
+          fetchData();
+          refetchTrading();
+        }
+      )
+      // 5. Market Context Table Changes
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'market_context' },
