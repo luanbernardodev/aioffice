@@ -97,18 +97,20 @@ assert res.get("reason") != "macro_veto"
 print("[OK] Teste 2: Golden Ticket (force_execute=True) bypassou red flag do Setor 2 e veto do Setor 3 com sucesso!")
 
 # -----------------------------------------------------------------------------------------
-# TESTE 3: Stop Loss Médio Dinâmico (1.5x ATR) e Remoção de TP Fixo (TP=0)
+# TESTE 3: Stop Loss Médio Dinâmico (1.5x ATR) e Injeção de Hard Take Profit Físico (R:R 1:1.5)
 # -----------------------------------------------------------------------------------------
 order = bridge.execute_order("BTCUSD", "BUY", 0.05, comment="ops_beta", db=db)
 assert order["success"] is True
-assert order["tp"] == 0.0, f"TP deveria ser 0.0, obtido: {order['tp']}"
+sl_dist = abs(order["price"] - order["sl"])
+expected_tp = round(order["price"] + sl_dist * 1.5, 2)
+assert abs(order["tp"] - expected_tp) < 1.0, f"Hard TP esperado ~{expected_tp}, obtido: {order['tp']}"
 
 # Verifica se o SL foi calculado dinamicamente com 1.5x ATR
 current_price = order["price"]
 current_atr = bridge.get_current_atr("BTCUSD", "M15", 14)
-expected_sl = round(current_price - 1.5 * current_atr, 5)
+expected_sl = round(current_price - 1.5 * current_atr, 2)
 assert abs(order["sl"] - expected_sl) < 1.0, f"SL esperado ~{expected_sl}, obtido {order['sl']}"
-print(f"[OK] Teste 3: execute_order definiu TP=0 e Stop Loss médio dinâmico em 1.5x ATR ({order['sl']}).")
+print(f"[OK] Teste 3: execute_order definiu Hard TP físico ({order['tp']}) e Stop Loss ({order['sl']}) com sucesso!")
 
 # -----------------------------------------------------------------------------------------
 # TESTE 4: Loop de Fecho Dinâmico por RSI (monitor_open_positions_and_close)

@@ -3,7 +3,7 @@
 import React, { useMemo } from 'react';
 import { Html } from '@react-three/drei';
 import { Trade, MT5AccountStatus, AgentStatus, MarketContext } from '@/types';
-import { getAgentPerformanceMetrics } from '@/lib/pnlUtils';
+import { getAgentPerformanceMetrics, formatPnL } from '@/lib/pnlUtils';
 import {
   Wallet,
   Zap,
@@ -72,18 +72,24 @@ export const WallCanvasScreens: React.FC<WallCanvasScreensProps> = ({
       const weight = ag?.allocation_weight !== undefined ? `${ag.allocation_weight.toFixed(1)}x` : '1.0x';
       const status = isQuarantined ? 'QUARENTENA' : (ag?.current_state || 'IDLE');
 
+      const directProfit = ag?.total_profit ?? ag?.pnl;
+      const finalPnL = (directProfit !== undefined && directProfit !== null && !isNaN(Number(directProfit)))
+        ? Number(directProfit)
+        : metrics.netPnL;
+      const fmt = formatPnL(finalPnL);
+
       return {
         ...op,
-        pnl: metrics.netPnL,
-        pnlFormatted: metrics.formattedPnL,
+        pnl: finalPnL,
+        pnlFormatted: fmt.formatted,
         wr: `${metrics.winRate}%`,
         alloc: weight,
         status,
         isQuarantined,
-        color: metrics.colorClass,
+        color: fmt.colorClass,
         badge: isQuarantined
           ? 'bg-rose-950 text-rose-400 border-rose-500/40'
-          : metrics.netPnL >= 0
+          : finalPnL >= 0
           ? 'bg-emerald-950 text-emerald-400 border-emerald-500/40'
           : 'bg-rose-950 text-rose-400 border-rose-500/40',
       };

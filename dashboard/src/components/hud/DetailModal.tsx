@@ -57,11 +57,20 @@ export const DetailModal: React.FC<DetailModalProps> = ({
             </div>
 
             {/* Metrics & State */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 my-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 my-4">
               <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
                 <span className="text-[10px] font-mono text-slate-400 block">ESTADO ATUAL</span>
                 <span className="text-sm font-bold font-mono text-cyan-300 mt-1 block">
                   {selectedAgent.current_state}
+                </span>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
+                <span className="text-[10px] font-mono text-slate-400 block">PNL ACUMULADO</span>
+                <span className={`text-sm font-bold font-mono mt-1 block ${
+                  Number(selectedAgent.total_profit ?? selectedAgent.pnl ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                }`}>
+                  {Number(selectedAgent.total_profit ?? selectedAgent.pnl ?? 0) >= 0 ? '+' : ''}
+                  ${Number(selectedAgent.total_profit ?? selectedAgent.pnl ?? 0).toFixed(2)}
                 </span>
               </div>
               <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">

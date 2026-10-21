@@ -139,11 +139,11 @@ def settle_open_trades(db: DatabaseManager, bridge: MT5Bridge) -> int:
                 hit_sl = bar["low"] <= sl if is_buy else bar["high"] >= sl
                 hit_tp = bar["high"] >= tp if is_buy else bar["low"] <= tp
                 if hit_sl:
-                    db.close_trade(trade["id"], -risk, sl, "SL")
+                    db.close_trade(trade["id"], -risk, sl, "SL", agent_id=trade.get("agent_id"))
                     closed += 1
                     break
                 if hit_tp:
-                    db.close_trade(trade["id"], reward, tp, "TP")
+                    db.close_trade(trade["id"], reward, tp, "TP", agent_id=trade.get("agent_id"))
                     closed += 1
                     # Saída da Quarentena por Mérito: se acertar TP, cancela quarentena e zera losses
                     aid = trade.get("agent_id")
@@ -225,14 +225,16 @@ def execute_autonomous_trigger(trigger: Dict[str, Any], db: DatabaseManager,
         atr_value = float(trigger.get("atr", 10.0))
         sign = 1 if action == "BUY" else -1
         sl = entry - sign * sl_mult * atr_value
-        tp = 0.0  # Take Profit Nulo: Fechamento dinâmico baseado em RSI (BUY fecha se RSI >= 60, SELL fecha se RSI <= 40)
+        # Hard Take Profit Físico projetando R:R mínimo de 1:1.5
+        sl_dist = abs(entry - sl)
+        tp = entry + sign * (sl_dist * 1.5)
 
         sizing = bridge.calculate_lot(symbol, entry, sl, weight)
         if sizing["volume"] <= 0:
             db.update_agent_status(agent_id, "IDLE", "Lote calculado é zero (risco excede limites).")
             return {"agent_id": agent_id, "symbol": symbol, "action": "HOLD", "reason": "lot_too_small"}
 
-        order = bridge.execute_order(symbol, action, sizing["volume"], sl=sl, tp=0.0,
+        order = bridge.execute_order(symbol, action, sizing["volume"], sl=sl, tp=tp,
                                      comment=agent_id, agent_id=agent_id, db=db)
         if not order.get("success"):
             db.update_agent_status(agent_id, "IDLE", f"Ordem recusada pela corretora: {order.get('retcode')}")

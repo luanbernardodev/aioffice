@@ -290,11 +290,24 @@ export const CommandHUD: React.FC<CommandHUDProps> = ({
                     </div>
                   </div>
 
-                  {a.allocation_weight !== undefined && (
-                    <span className="text-[9px] font-mono text-amber-400 bg-amber-950/40 px-1 rounded border border-amber-500/30 font-bold ml-1 flex-shrink-0">
-                      {a.allocation_weight}x
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1 flex-shrink-0 ml-1">
+                    {((a.total_profit !== undefined && a.total_profit !== null) || (a.pnl !== undefined && a.pnl !== null)) && (
+                      <span className={`text-[9px] font-mono font-bold px-1 rounded border ${
+                        Number(a.total_profit ?? a.pnl ?? 0) > 0 
+                          ? 'text-emerald-400 bg-emerald-950/60 border-emerald-500/40' 
+                          : Number(a.total_profit ?? a.pnl ?? 0) < 0
+                          ? 'text-rose-400 bg-rose-950/60 border-rose-500/40'
+                          : 'text-slate-400 bg-slate-900 border-slate-700/50'
+                      }`}>
+                        {Number(a.total_profit ?? a.pnl ?? 0) > 0 ? '+' : Number(a.total_profit ?? a.pnl ?? 0) < 0 ? '-' : ''}${Math.abs(Number(a.total_profit ?? a.pnl ?? 0)).toFixed(1)}
+                      </span>
+                    )}
+                    {a.allocation_weight !== undefined && (
+                      <span className="text-[9px] font-mono text-amber-400 bg-amber-950/40 px-1 rounded border border-amber-500/30 font-bold">
+                        {a.allocation_weight}x
+                      </span>
+                    )}
+                  </div>
                 </div>
               );
             })}

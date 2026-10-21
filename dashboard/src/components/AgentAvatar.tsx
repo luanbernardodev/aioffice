@@ -210,6 +210,15 @@ export const AgentAvatar: React.FC<AgentAvatarProps> = ({
           <span className={`text-[9px] px-1.5 py-0.2 rounded border font-mono ${stateBadge.bg}`}>
             {state}
           </span>
+          {((agent.total_profit !== undefined && agent.total_profit !== null) || (agent.pnl !== undefined && agent.pnl !== null)) && (
+            <span className={`text-[9px] font-mono font-bold px-1 rounded border ${
+              Number(agent.total_profit ?? agent.pnl ?? 0) >= 0
+                ? 'text-emerald-400 bg-emerald-950/60 border-emerald-500/40'
+                : 'text-rose-400 bg-rose-950/60 border-rose-500/40'
+            }`}>
+              {Number(agent.total_profit ?? agent.pnl ?? 0) >= 0 ? '+' : ''}${Number(agent.total_profit ?? agent.pnl ?? 0).toFixed(1)}
+            </span>
+          )}
           {agent.allocation_weight !== undefined && (
             <span className="text-[9px] text-amber-400 font-mono bg-amber-950/40 px-1 rounded border border-amber-500/30">
               W: {agent.allocation_weight}x

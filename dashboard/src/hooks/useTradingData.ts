@@ -143,7 +143,9 @@ export function useTradingData() {
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
 
-  // 1. Fetch inicial de trades, mt5_account_status e system_config
+  const [agentPnLMap, setAgentPnLMap] = useState<Record<string, number>>({});
+
+  // 1. Fetch inicial de trades, mt5_account_status, system_config e agents_status
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
@@ -156,6 +158,23 @@ export function useTradingData() {
 
       if (tradesErr) throw tradesErr;
       setTrades(tradesData || []);
+
+      // Busca dados de PnL consolidados de agents_status
+      const { data: agentsData } = await supabase
+        .from('agents_status')
+        .select('agent_id, total_profit, pnl');
+
+      if (agentsData && Array.isArray(agentsData)) {
+        const pMap: Record<string, number> = {};
+        agentsData.forEach((ag: any) => {
+          const val = ag.total_profit ?? ag.pnl;
+          if (val !== undefined && val !== null && ag.agent_id) {
+            pMap[ag.agent_id] = Number(val);
+            pMap[ag.agent_id.replace(/^ops_/, '')] = Number(val);
+          }
+        });
+        setAgentPnLMap(pMap);
+      }
 
       // Busca mt5_account_status (linha id = 1)
       const { data: accountData, error: accountErr } = await supabase
@@ -223,6 +242,24 @@ export function useTradingData() {
             setTrades((prev) =>
               prev.filter((t) => String(t.ticket_mt5) !== String(oldTrade.ticket_mt5))
             );
+          }
+        }
+      )
+      // Monitora agents_status (atualização em tempo real de PnL dos agentes)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'agents_status' },
+        (payload) => {
+          if (payload.new) {
+            const ag = payload.new as any;
+            const val = ag.total_profit ?? ag.pnl;
+            if (val !== undefined && val !== null && ag.agent_id) {
+              setAgentPnLMap((prev) => ({
+                ...prev,
+                [ag.agent_id]: Number(val),
+                [ag.agent_id.replace(/^ops_/, '')]: Number(val),
+              }));
+            }
           }
         }
       )
@@ -355,10 +392,15 @@ export function useTradingData() {
       }
     });
 
-    // Pós-processamento: arredondamento, taxa de acerto e formatação
+    // Pós-processamento: consolidação com agentPnLMap do Supabase, arredondamento, taxa de acerto e formatação
     Object.keys(performance).forEach((aid) => {
       const item = performance[aid];
-      item.pnl = Math.round(item.pnl * 100) / 100;
+      const direct = agentPnLMap[aid] ?? agentPnLMap[aid.replace(/^ops_/, '')];
+      if (direct !== undefined && direct !== null && !isNaN(direct) && (item.pnl === 0 || direct !== 0)) {
+        item.pnl = Math.round(direct * 100) / 100;
+      } else {
+        item.pnl = Math.round(item.pnl * 100) / 100;
+      }
       const decided = item.wins + item.losses;
       item.winRate = decided > 0 ? Math.round((item.wins / decided) * 100) : 0;
 
@@ -376,7 +418,7 @@ export function useTradingData() {
     });
 
     return performance;
-  }, [trades]);
+  }, [trades, agentPnLMap]);
 
   // 4. Helper seguro para obter performance de qualquer agente
   const getAgentPerformance = useCallback(

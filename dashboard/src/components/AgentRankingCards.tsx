@@ -62,7 +62,11 @@ export const AgentRankingCards: React.FC<AgentRankingCardsProps> = ({ agents, tr
       accent: theme.accent,
       agent,
       winRate: metrics.winRate,
-      totalProfit: metrics.netPnL,
+      totalProfit: (agent.total_profit !== undefined && agent.total_profit !== null && !isNaN(Number(agent.total_profit)))
+        ? Number(agent.total_profit)
+        : (agent.pnl !== undefined && agent.pnl !== null && !isNaN(Number(agent.pnl)))
+        ? Number(agent.pnl)
+        : metrics.netPnL,
       profitFactor: metrics.profitFactor,
       allocationWeight: agent.allocation_weight ?? 1.0,
       currentState: agent.current_state || 'IDLE',

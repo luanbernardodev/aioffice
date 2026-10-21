@@ -389,27 +389,56 @@ class MT5Bridge:
         else:
             primary_creds = (self.demo_login, self.demo_password, self.demo_server)
 
+        actual_symbol = resolve_symbol(symbol)
+
+        # Determinação rigorosa de casas decimais (digits) do ativo
+        digits = 2 if any(k in actual_symbol.upper() for k in ("JPY", "BTC", "ETH", "SOL", "XAU", "GOLD")) else 5
+        if not self.mock and mt5 is not None:
+            sym_info = mt5.symbol_info(actual_symbol)
+            if sym_info:
+                digits = getattr(sym_info, "digits", digits)
+
         price = self.get_price(symbol, action)
 
-        # Regra 1: Take Profit Nulo no MT5 (0 / Sem TP fixo, pois é ditado dinamicamente por RSI)
-        tp = 0.0
-
-        # Regra 2: Stop Médio Dinâmico baseado em 1.5x o ATR atual (adaptável à volatilidade)
-        atr_val = self.get_current_atr(symbol, "M15", 14)
+        # Regra 1: Stop Loss Médio Dinâmico (1.5x ATR se não especificado)
         sign = 1 if action == "BUY" else -1
-        stop_dist = 1.5 * atr_val
-        sl = round(price - sign * stop_dist, 5)
+        if sl is None or sl <= 0:
+            atr_val = self.get_current_atr(symbol, "M15", 14)
+            stop_dist = 1.5 * atr_val
+            sl = price - sign * stop_dist
+
+        # Regra 2: Distância de risco (Preço de Entrada <-> Stop Loss)
+        sl_distance = abs(price - sl)
+        if sl_distance <= 0:
+            atr_val = self.get_current_atr(symbol, "M15", 14)
+            sl_distance = max(1.5 * atr_val, price * 0.005)
+            sl = price - sign * sl_distance
+
+        # Regra 3: Injeção de Hard Take Profit Físico (Risco:Retorno mínimo de 1:1.5)
+        # Para COMPRA: tp = ask + (sl_distance * 1.5)
+        # Para VENDA:  tp = bid - (sl_distance * 1.5)
+        min_tp_dist = sl_distance * 1.5
+        if action == "BUY":
+            calc_tp = price + min_tp_dist
+            tp = max(tp, calc_tp) if (tp is not None and tp > price) else calc_tp
+        else:
+            calc_tp = price - min_tp_dist
+            tp = min(tp, calc_tp) if (tp is not None and tp < price and tp > 0) else calc_tp
+
+        # Normalização matemática absoluta com base nos dígitos da corretora
+        sl = round(float(sl), digits)
+        tp = round(float(tp), digits)
 
         if self.mock:
             ticket_sintetico = int(time.time() * 1000) % 10**9
-            log.info("[MOCK ORDER] %s %s %.2f %s | Preço: %.5f | SL Médio (1.5x ATR): %.5f | TP: 0.0 (Sem TP) | Conta: %s | Modo: %s",
-                     aid, action, volume, symbol, price, sl, target_account, trading_mode)
+            log.info("[MOCK ORDER] %s %s %.2f %s | Preço: %.5f | SL: %.5f | Hard TP (1:1.5 R:R): %.5f | Conta: %s | Modo: %s",
+                     aid, action, volume, symbol, price, sl, tp, target_account, trading_mode)
             return {
                 "success": True,
                 "ticket": ticket_sintetico,
                 "price": price,
                 "sl": sl,
-                "tp": 0.0,
+                "tp": tp,
                 "mock": True,
                 "execution_account": target_account,
                 "trading_mode": trading_mode,
@@ -417,8 +446,8 @@ class MT5Bridge:
             }
 
         # 5. Context Switching Seguro: Conecta na conta Target antes de mt5.order_send()
-        log.info("[ROTEAMENTO MT5] Executando ordem de %s em conta %s (#%s) | SL Médio: %.5f | TP: 0.0",
-                 aid, target_account, target_creds[0], sl)
+        log.info("[ROTEAMENTO MT5] Executando ordem de %s em conta %s (#%s) | Preço: %.5f | SL: %.5f | Hard TP: %.5f",
+                 aid, target_account, target_creds[0], price, sl, tp)
         self.login_account(*target_creds)
 
         order_type = mt5.ORDER_TYPE_BUY if action == "BUY" else mt5.ORDER_TYPE_SELL
@@ -431,12 +460,12 @@ class MT5Bridge:
             for filling in (mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN):
                 request = {
                     "action": mt5.TRADE_ACTION_DEAL,
-                    "symbol": symbol,
+                    "symbol": actual_symbol,
                     "volume": float(volume),
                     "type": order_type,
                     "price": price,
                     "sl": float(sl),
-                    "tp": 0.0,  # TP Nulo / Sem TP fixo no MT5
+                    "tp": float(tp),  # Hard Take Profit físico registrado na corretora (R:R min 1:1.5)
                     "deviation": deviation,
                     "magic": magic,
                     "comment": f"{comment[:23]} [{target_account[:4]}]",
@@ -445,8 +474,8 @@ class MT5Bridge:
                 }
                 result = mt5.order_send(request)
                 if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
-                    log.info("Ordem MT5 executada com sucesso na conta %s: ticket=%s | preço=%.5f | sl=%.5f | tp=0.0 | magic=%d",
-                             target_account, result.order, result.price, sl, magic)
+                    log.info("Ordem MT5 executada com sucesso na conta %s: ticket=%s | preço=%.5f | sl=%.5f | tp=%.5f | magic=%d",
+                             target_account, result.order, result.price, sl, tp, magic)
                     success = True
                     break
         finally:
@@ -460,7 +489,7 @@ class MT5Bridge:
                 "ticket": result.order,
                 "price": result.price,
                 "sl": sl,
-                "tp": 0.0,
+                "tp": tp,
                 "mock": False,
                 "execution_account": target_account,
                 "trading_mode": trading_mode,
@@ -715,7 +744,7 @@ class MT5Bridge:
                                 "dry_run": False,
                                 "execution_account": exec_acc,
                             })
-                            db.close_trade(ticket, floating_pnl, exit_price, outcome=reason)
+                            db.close_trade(ticket, floating_pnl, exit_price, outcome=reason, agent_id=agent_id)
 
                             # Remove da memória de gestão
                             managed_positions.pop(ticket, None)
@@ -821,7 +850,7 @@ class MT5Bridge:
                         "dry_run": bool(trade.get("dry_run", True)),
                         "execution_account": trade.get("execution_account", "DEMO"),
                     })
-                    db.close_trade(ticket, round(real_pnl, 2), exit_price, outcome=reason)
+                    db.close_trade(ticket, round(real_pnl, 2), exit_price, outcome=reason, agent_id=trade.get("agent_id", "ops_beta"))
 
                     # Remove da memória de gestão
                     managed_positions.pop(ticket, None)
@@ -957,6 +986,8 @@ class MT5Bridge:
                         "DEMO" if "[DEMO" in d_comment else mode
                     )
 
+                    is_new_close = (not existing) or (existing[0].get("status") != "CLOSED")
+
                     db.upsert_trade({
                         "ticket_mt5": ticket_id,
                         "agent_id": agent_id,
@@ -975,6 +1006,10 @@ class MT5Bridge:
                         "closed_at": datetime.now(timezone.utc).isoformat(),
                         "execution_account": exec_acc,
                     })
+
+                    # Atualiza imediatamente o PnL acumulado do agente no Supabase
+                    if is_new_close and agent_id:
+                        db.add_agent_profit(agent_id, profit)
 
                     # Saída da Quarentena por Mérito (se acertou trade em Shadow Trading)
                     if profit > 0 and agent_id:

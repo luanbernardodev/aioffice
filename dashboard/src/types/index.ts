@@ -9,6 +9,10 @@ export interface AgentStatus {
   last_thought: string;
   allocation_weight: number;
   updated_at?: string;
+  total_profit?: number;
+  pnl?: number;
+  consecutive_losses?: number;
+  quarantine_until?: string | null;
 }
 
 export interface MarketContext {

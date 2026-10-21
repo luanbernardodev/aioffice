@@ -86,10 +86,10 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData();
 
-    // Setup Supabase Realtime Channels para Agents e Market Context
+    // Setup Supabase Realtime Channels para Agents, Trades, MT5 Account e Market Context
     const channel = supabase
-      .channel('quant_office_realtime_agents_macro')
-      // 1. Agents Status Table Changes
+      .channel('quant_office_realtime_main_dashboard')
+      // 1. Ouvir eventos de UPDATE, INSERT, DELETE na tabela de agentes (agents_status)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'agents_status' },
@@ -108,7 +108,25 @@ export default function DashboardPage() {
           }
         }
       )
-      // 2. Market Context Table Changes
+      // 2. Ouvir eventos de INSERT e UPDATE na tabela de histórico de ordens (trades_history)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'trades_history' },
+        () => {
+          // Reação instantânea: atualiza trades e histórico de ordens fechadas pela VPS
+          refetchTrading();
+          fetchData();
+        }
+      )
+      // 3. Ouvir eventos de UPDATE em mt5_account_status (atualização instantânea de saldo e PnL)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'mt5_account_status' },
+        () => {
+          refetchTrading();
+        }
+      )
+      // 4. Market Context Table Changes
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'market_context' },
@@ -130,7 +148,7 @@ export default function DashboardPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchData]);
+  }, [fetchData, refetchTrading]);
 
   // Timers ref for coordinated Domino sequence
   const dominoTimersRef = useRef<NodeJS.Timeout[]>([]);

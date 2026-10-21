@@ -9,3 +9,15 @@ alter table public.trades_history
 -- Mapeamento usado pelo código em trades_history:
 --   ticket_mt5 (PK) | order_type (BUY/SELL) | profit_usd | close_price | technical_rationale
 -- Recomendado: habilitar RLS (as tabelas hoje estão abertas para a chave anon/publishable).
+
+-- Alterações aditivas para métricas de PnL de agentes:
+alter table public.agents_status
+  add column if not exists total_profit double precision not null default 0.0,
+  add column if not exists pnl double precision not null default 0.0;
+
+create or replace view public.agents as select * from public.agents_status;
+
+alter table public.system_config
+  add column if not exists total_pnl double precision not null default 0.0,
+  add column if not exists agents_pnl jsonb not null default '{}'::jsonb;
+

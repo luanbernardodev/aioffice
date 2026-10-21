@@ -501,7 +501,48 @@ class DatabaseManager:
     def get_open_trades(self) -> List[dict]:
         return [self._normalize_trade(r) for r in self._select("trades_history", eq={"status": "OPEN"})]
 
-    def close_trade(self, trade_id: Any, pnl: float, exit_price: float, outcome: str) -> None:
+    def add_agent_profit(self, agent_id: str, profit: float) -> float:
+        """Soma o lucro líquido (profit) ao total_profit e pnl do agente em agents_status e system_config."""
+        if not agent_id:
+            return 0.0
+        profit = round(float(profit), 2)
+        try:
+            # 1. Atualizar agents_status
+            rows = self._select("agents_status", eq={"agent_id": agent_id}, limit=1)
+            current_profit = 0.0
+            if rows:
+                current_profit = float(rows[0].get("total_profit") if rows[0].get("total_profit") is not None else (rows[0].get("pnl") or 0.0))
+            new_agent_profit = round(current_profit + profit, 2)
+
+            self._update("agents_status", {
+                "total_profit": new_agent_profit,
+                "pnl": new_agent_profit,
+                "updated_at": _now(),
+            }, {"agent_id": agent_id})
+
+            # 2. Atualizar system_config com total acumulado e mapa de agentes
+            try:
+                cfg = self.get_system_config()
+                total_pnl = round(float(cfg.get("total_pnl") or 0.0) + profit, 2)
+                agents_pnl = dict(cfg.get("agents_pnl") or {})
+                agents_pnl[agent_id] = new_agent_profit
+                self._update("system_config", {
+                    "total_pnl": total_pnl,
+                    "agents_pnl": agents_pnl,
+                    "updated_at": _now(),
+                }, {"id": 1})
+            except Exception as cfg_err:
+                log.warning("Falha ao atualizar system_config com PnL: %s", cfg_err)
+
+            log.info("[SUPABASE PNL UPDATE] Agente %s: %+0.2f USD -> Total Profit: $%.2f",
+                     agent_id, profit, new_agent_profit)
+            return new_agent_profit
+        except Exception as exc:
+            log.error("Erro ao atualizar PnL do agente %s no Supabase: %s", agent_id, exc)
+            return 0.0
+
+    def close_trade(self, trade_id: Any, pnl: float, exit_price: float, outcome: str,
+                    agent_id: Optional[str] = None) -> None:
         """`trade_id` é o ticket_mt5. `outcome` (TP/SL/RSI) é registrado no log e exit_reason."""
         if "RSI" in str(outcome).upper():
             reason = str(outcome)
@@ -509,11 +550,22 @@ class DatabaseManager:
             reason = "TP_HIT"
         else:
             reason = "SL_HIT"
+
+        aid = agent_id
+        if not aid:
+            existing = self._select("trades_history", eq={"ticket_mt5": trade_id}, limit=1)
+            if existing:
+                aid = existing[0].get("agent_id")
+
         self._update("trades_history", {
             "status": "CLOSED", "profit_usd": pnl, "close_price": exit_price,
             "current_price": exit_price, "exit_reason": reason, "closed_at": _now(),
         }, {"ticket_mt5": trade_id})
         log.info("Trade %s fechado por %s (%s): %.2f", trade_id, outcome, reason, pnl)
+
+        # Atualização imediata do PnL do agente no Supabase
+        if aid:
+            self.add_agent_profit(aid, pnl)
 
     def get_trades_last_24h(self) -> List[dict]:
         since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()

@@ -548,8 +548,15 @@ export const VoxelAgent: React.FC<VoxelAgentProps> = ({
 
   // Dynamic Real Net PnL from trades_history (filtering strictly status === 'CLOSED')
   const agentPnL = useMemo(() => {
+    // 1. Prioridade máxima: valor da coluna do Supabase (total_profit ou pnl)
+    if (agent.total_profit !== undefined && agent.total_profit !== null && !isNaN(Number(agent.total_profit))) {
+      return Number(agent.total_profit);
+    }
+    if (agent.pnl !== undefined && agent.pnl !== null && !isNaN(Number(agent.pnl))) {
+      return Number(agent.pnl);
+    }
     return getAgentNetPnL(trades, agent.agent_id);
-  }, [trades, agent.agent_id]);
+  }, [trades, agent.agent_id, agent.total_profit, agent.pnl]);
 
   const pnlFormatting = useMemo(() => {
     return formatPnL(agentPnL);
@@ -601,12 +608,24 @@ export const VoxelAgent: React.FC<VoxelAgentProps> = ({
 
     // Para todos os agentes operadores, o Net PnL é OBRIGATÓRIO e prioritário na pílula 3D
     if (isOps) {
+      // 1. Prioridade máxima: coluna total_profit ou pnl diretamente do Supabase no objeto agent
+      const hasSupabasePnL = (agent.total_profit !== undefined && agent.total_profit !== null) ||
+                             (agent.pnl !== undefined && agent.pnl !== null);
+      const supabaseVal = agent.total_profit !== undefined && agent.total_profit !== null
+        ? Number(agent.total_profit)
+        : Number(agent.pnl ?? 0);
+
       const perf =
         agentPerformance?.[agent.agent_id] ||
         agentPerformance?.[agent.agent_id.replace(/^ops_/, '')] ||
         (agentPerformance ? Object.values(agentPerformance).find((p) => p.agentId === agent.agent_id) : null);
 
-      if (perf) {
+      if (hasSupabasePnL && !isNaN(supabaseVal)) {
+        const fmt = formatPnL(supabaseVal);
+        pnl = fmt.formatted;
+        pnlColor = fmt.colorClass;
+        dotColor = fmt.dotColorClass;
+      } else if (perf && (perf.pnl !== 0 || perf.totalTrades > 0)) {
         pnl = perf.formattedPnL;
         pnlColor = perf.colorClass;
         dotColor = perf.dotColorClass;
