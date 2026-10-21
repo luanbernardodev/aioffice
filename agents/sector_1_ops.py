@@ -33,26 +33,22 @@ def run(trigger: Dict[str, Any], db: DatabaseManager, claude: ClaudeClient,
     if until and until > pd.Timestamp.now(tz="UTC").to_pydatetime():
         return None
     weight = float(status.get("allocation_weight", 1.0))
-
-    force_execute = bool(trigger.get("force_execute", False))
-
-    context = db.get_latest_market_context() or {}
-    if context.get("red_flag_pause_trading"):
-        if force_execute:
-            log.warning("[GOLDEN TICKET / BYPASS] Agente %s (force_execute=True) ignorou Red Flag de notícias do Setor 2!", agent_id)
-        else:
-            db.update_agent_status(agent_id, "IDLE", f"Red flag ativo: {symbol} fica de fora.")
-            return {"agent_id": agent_id, "action": "HOLD", "reason": "red_flag"}
     if weight <= 0:
         return None
-    # Gate macro: sem o OK (vigente) do Setor 3 nenhuma ordem chega ao MT5, exceto com Golden Ticket
-    if not db.is_macro_ok(status):
-        why = status.get("macro_reason") or "sem autorização macro vigente"
-        if force_execute:
-            log.warning("[GOLDEN TICKET / BYPASS] Agente %s (force_execute=True) ignorou Veto Macro do Setor 3 (%s)!", agent_id, why)
-        else:
-            db.update_agent_status(agent_id, "IDLE", f"Veto macro do Setor 3: {why}")
-            return {"agent_id": agent_id, "symbol": symbol, "action": "HOLD", "reason": "macro_veto"}
+
+    force_execute = bool(trigger.get("force_execute", True))
+
+    context = db.get_latest_market_context() or {}
+    crypto_s = context.get("crypto_sentiment", 0)
+    gold_s = context.get("gold_sentiment", 0)
+    driver = context.get("key_driver", "sem dados")
+    red_flag = bool(context.get("red_flag_pause_trading", False))
+    market_context_str = f"Crypto: {crypto_s} | Gold: {gold_s} | Driver: {driver}"
+    if red_flag:
+        market_context_str += " [RED FLAG REGISTRADO COMO CONTEXTO - SEM VETO]"
+
+    log.info("[SETOR 2 INFORMATIVO] Sinal do Setor 1 em %s (%s). Contexto macro: %s",
+             symbol, agent_id, market_context_str)
 
     strategy = trigger.get("strategy") or strategy_of(status or agent_id)
     params = db.get_strategy_params(agent_id)
@@ -62,9 +58,9 @@ def run(trigger: Dict[str, Any], db: DatabaseManager, claude: ClaudeClient,
             "agent_id": agent_id, "strategy_style": OPS_STYLES.get(strategy, ""),
             "trigger": trigger,
             "macro_context": {
-                "crypto_sentiment": context.get("crypto_sentiment", 0),
-                "gold_sentiment": context.get("gold_sentiment", 0),
-                "key_driver": context.get("key_driver", "sem dados"),
+                "crypto_sentiment": crypto_s,
+                "gold_sentiment": gold_s,
+                "key_driver": driver,
             },
             "current_params": params,
         }, max_tokens=1500)
@@ -105,7 +101,7 @@ def run(trigger: Dict[str, Any], db: DatabaseManager, claude: ClaudeClient,
             return {"agent_id": agent_id, "symbol": symbol, "action": "HOLD", "reason": "order_rejected"}
         db.log_trade(agent_id, symbol, action, sizing["volume"], order.get("price", entry), sl, tp,
                      sizing["risk_amount"], confidence, rationale, order.get("ticket"),
-                     dry_run=bool(order.get("mock")))
+                     dry_run=bool(order.get("mock")), market_context=market_context_str)
         db.update_agent_status(agent_id, "IDLE", thought)
         log.info("%s %s %s vol=%s conf=%s", agent_id, action, symbol, sizing["volume"], confidence)
         return {"agent_id": agent_id, "symbol": symbol, "action": action, "confidence": confidence,
@@ -168,13 +164,19 @@ def settle_open_trades(db: DatabaseManager, bridge: MT5Bridge) -> int:
     return closed
 
 
+# Anti-Spam Tick a Tick: Mantém registro de candle_time executado por (symbol, agent_id)
+_LAST_EXECUTED_BARS: Dict[tuple, str] = {}
+
+
 def execute_autonomous_trigger(trigger: Dict[str, Any], db: DatabaseManager,
                                bridge: MT5Bridge) -> Optional[Dict[str, Any]]:
     """Motor Operacional Autônomo (Loop 1):
-    Execução matemática PURA (zero chamadas à API Claude para máxima velocidade e economia de tokens).
-    Agentes em QUARANTINED continuam calculando e gerando gatilhos operando em Shadow Trading (DEMO).
-    Verifica red flags e consulta o SEMÁFORO DO SETOR 3 (macro_viable vigente).
-    Se liberado, calcula lotes e dispara ordem no MT5 com roteamento dinâmico."""
+    Execução matemática PURA com autonomia total dos agentes do Setor 1.
+    - Se emitir sinal técnico (RSI no alvo), a ordem DEVE SER ENVIADA PARA A CORRETORA IMEDIATAMENTE.
+    - O Setor 2 (Notícias/Macro) perde o poder de veto (veto_power = False). O sentimento serve apenas como log.
+    - O sentimento das notícias é registrado em trades_history na coluna market_context.
+    - Anti-Spam Tick a Tick: Garante estritamente 1 tiro por formação de vela via last_bar_time.
+    """
     agent_id = trigger["agent_id"]
     symbol = trigger["symbol"]
     action = trigger.get("bias", "BUY")
@@ -184,46 +186,46 @@ def execute_autonomous_trigger(trigger: Dict[str, Any], db: DatabaseManager,
     if status.get("current_state") in ("IN_MEETING", "FIRED"):
         return None
 
+    # 4. ANTI-SPAM TICK A TICK: Garante no máximo 1 tiro por vela por agente/ativo
+    candle_time = trigger.get("candle_time")
+    if candle_time and _LAST_EXECUTED_BARS.get((symbol, agent_id)) == str(candle_time):
+        log.info("[ANTI-SPAM TICK A TICK] Agente %s já disparou ordem no candle %s para %s. Restrito a 1 tiro por vela.",
+                 agent_id, candle_time, symbol)
+        return {"agent_id": agent_id, "symbol": symbol, "action": "HOLD", "reason": "bar_already_traded"}
+
     is_quarantined = (status.get("current_state") == "QUARANTINED")
 
     weight = float(status.get("allocation_weight", 1.0) or 1.0)
     if weight <= 0:
         weight = 1.0
 
-    force_execute = bool(trigger.get("force_execute", False))
-
+    # 2. REBAIXAMENTO DO SETOR 2 (Fim do Veto): Notícias são apenas contexto/log informativo
     context = db.get_latest_market_context() or {}
-    if context.get("red_flag_pause_trading"):
-        if force_execute:
-            log.warning("[GOLDEN TICKET / BYPASS] Agente %s (force_execute=True) ignorou Red Flag de notícias do Setor 2!", agent_id)
-        else:
-            db.update_agent_status(agent_id, "IDLE", f"Red flag de notícias ativo: {symbol} em espera.")
-            return {"agent_id": agent_id, "action": "HOLD", "reason": "red_flag"}
+    crypto_s = context.get("crypto_sentiment", 0)
+    gold_s = context.get("gold_sentiment", 0)
+    driver = context.get("key_driver", "sem dados")
+    red_flag = bool(context.get("red_flag_pause_trading", False))
+    market_context_str = f"Crypto: {crypto_s} | Gold: {gold_s} | Driver: {driver}"
+    if red_flag:
+        market_context_str += " [RED FLAG INFORMATIVO - SEM VETO]"
 
-    # --- O FILTRO (SEMÁFORO DO SETOR 3) ---
-    if not db.is_macro_ok(status):
-        why = status.get("macro_reason") or "Sem autorização macro do Setor 3"
-        if force_execute:
-            log.warning("[GOLDEN TICKET / BYPASS] Agente %s (force_execute=True) ignorou Veto Macro do Setor 3 (%s)!", agent_id, why)
-        else:
-            db.update_agent_status(agent_id, "IDLE", f"Veto macro do Setor 3: {why}")
-            log.warning("[SEMÁFORO SETOR 3 - VETO] Operador %s abortado para %s: %s", agent_id, symbol, why)
-            return {"agent_id": agent_id, "symbol": symbol, "action": "HOLD", "reason": "macro_veto"}
+    log.info("[AUTONOMIA SETOR 1] Gatilho técnico detectado para %s em %s (%s). Contexto macro (log): %s",
+             agent_id, symbol, action, market_context_str)
 
     params = db.get_strategy_params(agent_id)
     sl_mult = float(params.get("sl_atr_multiplier", 1.5))
 
     mode_label = " (Shadow Trading - DEMO)" if is_quarantined else ""
-    gt_label = " [GOLDEN TICKET / BYPASS]" if force_execute else ""
-    thought = f"Gatilho autônomo {trigger.get('trigger')} em {symbol}! Disparando ordem {action}{mode_label}{gt_label}..."
+    thought = f"Gatilho autônomo {trigger.get('trigger')} em {symbol}! Disparando ordem {action}{mode_label} imediatamente..."
     db.update_agent_status(agent_id, "EXECUTING", thought)
 
     try:
+        # ENVIO IMEDIATO PARA A CORRETORA
         entry = bridge.get_price(symbol, action)
         atr_value = float(trigger.get("atr", 10.0))
         sign = 1 if action == "BUY" else -1
         sl = entry - sign * sl_mult * atr_value
-        tp = 0.0  # Take Profit Nulo: Fechamento dinâmico baseado em RSI
+        tp = 0.0  # Take Profit Nulo: Fechamento dinâmico baseado em RSI (BUY fecha se RSI >= 60, SELL fecha se RSI <= 40)
 
         sizing = bridge.calculate_lot(symbol, entry, sl, weight)
         if sizing["volume"] <= 0:
@@ -237,26 +239,33 @@ def execute_autonomous_trigger(trigger: Dict[str, Any], db: DatabaseManager,
             log.error("[AUTONOMOUS] Ordem rejeitada: %s", order)
             return {"agent_id": agent_id, "symbol": symbol, "action": "HOLD", "reason": "order_rejected"}
 
+        # Registra no Anti-Spam Tick a Tick
+        if candle_time:
+            _LAST_EXECUTED_BARS[(symbol, agent_id)] = str(candle_time)
+
         ticket = order.get("ticket")
         exec_acc = order.get("execution_account", "DEMO" if is_quarantined else "REAL")
         final_sl = float(order.get("sl") or sl)
         final_tp = float(order.get("tp") or 0.0)
+
+        # Registro na tabela trades_history com o sentimento das notícias em market_context
         db.log_trade(
             agent_id, symbol, action, sizing["volume"], order.get("price", entry),
-            final_sl, final_tp, sizing["risk_amount"], confidence=88,
-            rationale=f"Gatilho Puro Python {trigger.get('trigger')} (M{trigger.get('timeframe')}) [{exec_acc}]{gt_label}",
-            ticket=ticket, dry_run=bool(order.get("mock")), execution_account=exec_acc
+            final_sl, final_tp, sizing["risk_amount"], confidence=95,
+            rationale=f"Gatilho Autônomo Matemático {trigger.get('trigger')} (M{trigger.get('timeframe')}) [{exec_acc}]",
+            ticket=ticket, dry_run=bool(order.get("mock")), execution_account=exec_acc,
+            market_context=market_context_str
         )
         badge = f"[{exec_acc}]"
         if exec_acc == "DEMO" and is_quarantined:
             badge = "[SHADOW TRADING - DEMO]"
         db.update_agent_status(agent_id, "EXECUTING", f"{badge} Posição aberta: {action} {sizing['volume']} {symbol} | Ticket #{ticket}")
-        log.info("[AUTONOMOUS EXECUTION SUCCESS] %s %s %s vol=%s entry=%s sl=%s tp=%s ticket=%s [%s]",
-                 agent_id, action, symbol, sizing["volume"], entry, sl, tp, ticket, exec_acc)
+        log.info("[AUTONOMOUS EXECUTION SUCCESS] %s %s %s vol=%s entry=%s sl=%s tp=%s ticket=%s [%s] Contexto: %s",
+                 agent_id, action, symbol, sizing["volume"], entry, sl, tp, ticket, exec_acc, market_context_str)
         return {
             "agent_id": agent_id, "symbol": symbol, "action": action,
             "volume": sizing["volume"], "sl": sl, "tp": tp, "ticket": ticket,
-            "execution_account": exec_acc,
+            "execution_account": exec_acc, "market_context": market_context_str,
         }
     except Exception as exc:  # noqa: BLE001
         log.exception("Falha ao executar ordem autônoma para %s: %s", agent_id, exc)

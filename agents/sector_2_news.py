@@ -12,6 +12,9 @@ log = logging.getLogger("sector2")
 AGENT_ID = "news_desk"
 
 
+VETO_POWER = False
+
+
 def _clamp_int(value: Any) -> int:
     try:
         return int(max(-10, min(10, round(float(value)))))
@@ -21,7 +24,7 @@ def _clamp_int(value: Any) -> int:
 
 def run(db: DatabaseManager, claude: ClaudeClient,
         context_or_headlines: Optional[Any] = None) -> Optional[Dict[str, Any]]:
-    """Recebe o contexto do news_collector, resume o macro-sentimento e devolve o resumo para o Setor 3."""
+    """Recebe o contexto do news_collector, resume o macro-sentimento apenas como contexto/log (SEM poder de veto)."""
     db.update_agent_status(AGENT_ID, "READING", "Folheando as manchetes e o radar macro...")
     try:
         headlines: List[Dict[str, Any]] = []
@@ -62,10 +65,11 @@ def run(db: DatabaseManager, claude: ClaudeClient,
         db.save_market_context(crypto, gold, red_flag, driver, headlines)
         thought = str(result.get("office_bubble_thought", "Mercado digerido."))
         db.update_agent_status(AGENT_ID, "ALERT" if red_flag else "IDLE", thought)
-        log.info("Notícias: cripto=%s ouro=%s redflag=%s | %s", crypto, gold, red_flag, driver)
+        log.info("Notícias: cripto=%s ouro=%s redflag=%s (veto_power=%s) | %s", crypto, gold, red_flag, VETO_POWER, driver)
         events = result.get("high_impact_events")
         return {"crypto_sentiment": crypto, "gold_sentiment": gold,
                 "red_flag_pause_trading": red_flag, "key_driver": driver,
+                "veto_power": False,
                 "macro_summary": str(result.get("macro_summary") or driver),
                 "high_impact_events": events if isinstance(events, list) else [],
                 "macro_calendar": macro_calendar}

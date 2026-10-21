@@ -458,6 +458,7 @@ class DatabaseManager:
         row["pnl"] = row.get("profit_usd") if row.get("status") == "CLOSED" else None
         row["rationale"] = row.get("technical_rationale")
         row["execution_account"] = row.get("execution_account") or "REAL"
+        row["market_context"] = row.get("market_context")
         return row
 
     def log_trade(self, agent_id: str, symbol: str, action: str, volume: float,
@@ -466,7 +467,8 @@ class DatabaseManager:
                   dry_run: bool = True, status: str = "OPEN", pnl: Optional[float] = None,
                   opened_at: Optional[str] = None, closed_at: Optional[str] = None,
                   current_price: Optional[float] = None, exit_reason: Optional[str] = None,
-                  execution_account: str = "REAL") -> dict:
+                  execution_account: str = "REAL",
+                  market_context: Optional[str] = None) -> dict:
         row = {
             # ticket_mt5 é PK sem default: em simulação geramos um número único
             "ticket_mt5": int(ticket) if ticket else uuid.uuid4().int % 10**15,
@@ -479,6 +481,7 @@ class DatabaseManager:
             "risk_amount": risk_amount, "confidence": confidence, "dry_run": dry_run,
             "opened_at": opened_at or _now(), "closed_at": closed_at,
             "execution_account": execution_account,
+            "market_context": (market_context or "")[:500] if market_context else None,
         }
         return self._normalize_trade(self._insert("trades_history", row))
 

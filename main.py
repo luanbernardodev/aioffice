@@ -121,7 +121,7 @@ class QuantOffice:
                         log.info("[LOOP 1 - GATILHO DETECTADO] Ativo: %s | Setup: %s [%s] -> Operador: %s",
                                  trig["symbol"], trig["trigger"], trig["bias"], trig["agent_id"])
 
-                        # Disparo Imediato via Motor Matemático (verificando Semáforo do Setor 3)
+                        # Disparo Imediato via Motor Matemático (Autonomia Total do Setor 1 - Fim do Veto)
                         result = sector_1_ops.execute_autonomous_trigger(trig, self.db, self.bridge)
                         if result:
                             log.info("[LOOP 1 - EXECUÇÃO RESULTADO] %s -> %s", trig["agent_id"], result)
@@ -132,9 +132,7 @@ class QuantOffice:
                     last_heartbeat_time = now_t
                     mt5_status = "Conectado" if self.bridge.connected and not self.bridge.mock else ("Simulado" if self.bridge.mock else "Desconectado")
                     m_ctx = self.db.get_latest_market_context() or {}
-                    ops_agents = self.db.get_active_ops_agents()
-                    has_veto = any(not self.db.is_macro_ok(a) for a in ops_agents) or bool(m_ctx.get("red_flag_pause_trading"))
-                    s3_veto = "Ativo" if has_veto else "Inativo"
+                    s2_veto_status = "Desativado (Sem Bloqueio)"
 
                     price_parts = []
                     asset_labels = {"BTCUSD": "BTC", "ETHUSD": "ETH", "SOLUSD": "SOL", "XAUUSD": "XAU"}
@@ -147,7 +145,7 @@ class QuantOffice:
                             price_parts.append(f"{label} ---")
 
                     prices_formatted = ", ".join(price_parts)
-                    heartbeat_msg = f"[TELEMETRIA VIVA] MT5: {mt5_status} | S3 Veto: {s3_veto} | Último Preço: {prices_formatted}"
+                    heartbeat_msg = f"[TELEMETRIA VIVA] MT5: {mt5_status} | Setor 2 Veto: {s2_veto_status} | Último Preço: {prices_formatted}"
                     print(f"\n{heartbeat_msg}\n", flush=True)
                     log.info(heartbeat_msg)
 

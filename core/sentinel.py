@@ -75,15 +75,12 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# -------------------------------------------------------- TRIPLE CHECK OBRIGATÓRIO
+# -------------------------------------------------------- ANÁLISE TÉCNICA E AUTONOMIA MATEMÁTICA
 def check_indecision_filters(df: pd.DataFrame, direction: str) -> Tuple[bool, Optional[str], Optional[str]]:
-    """Triple Check Obrigatório contra Zonas de Indecisão (Chop/Ruído Lateral):
-    PONTO 1: Exaustão Institucional (BUY se RSI < 20, SELL se RSI > 85).
-             Se 20 <= RSI <= 85, aborta: 'Abortado: Mercado em zona de indecisão (RSI Neutro)'.
-    PONTO 2: Filtro Anti-Lateralização (ADX > 25).
-             Se ADX <= 25, aborta: 'Abortado: Falta de força direcional (ADX Baixo)'.
-    PONTO 3: Rejeição ou Fluxo Institucional (Volume Spike >= 1.5x OU Pavio de Rejeição >= 60%).
-             Se nenhum dos dois for satisfeito, aborta.
+    """Validação técnica autônoma e direta para agentes do Setor 1:
+    - Triple Check (ADX > 25 e Volume Spike) REMOVIDO: autonomia matemática direta.
+    - Nova Regra de Compra Absoluta: Se RSI <= 30, gera sinal de COMPRA.
+    - Nova Regra de Venda Absoluta: Se RSI >= 70, gera sinal de VENDA.
     Retorna: (aprovado: bool, motivo_aborto: Optional[str], detalhes_aprovacao: Optional[str])
     """
     if len(df) < 20:
@@ -91,84 +88,35 @@ def check_indecision_filters(df: pd.DataFrame, direction: str) -> Tuple[bool, Op
 
     c = df.iloc[-1]
     rsi_val = float(c["rsi"]) if "rsi" in c and not pd.isna(c["rsi"]) else 50.0
-    adx_val = float(c["adx"]) if "adx" in c and not pd.isna(c["adx"]) else 0.0
 
-    # 1. PONTO DE CONFIRMAÇÃO 1: EXAUSTÃO INSTITUCIONAL (REGRA DE OURO)
     if direction == "BUY":
-        if rsi_val >= 20.0:
-            return False, f"Abortado: Mercado em zona de indecisão (RSI Neutro)", None
+        if rsi_val <= 30.0:
+            return True, None, f"RSI {rsi_val:.1f} <= 30 (Sinal de Compra Absoluto)"
+        return False, f"Abortado: Mercado em zona de indecisão (RSI Neutro: {rsi_val:.1f} > 30)", None
     elif direction == "SELL":
-        if rsi_val <= 85.0:
-            return False, f"Abortado: Mercado em zona de indecisão (RSI Neutro)", None
+        if rsi_val >= 70.0:
+            return True, None, f"RSI {rsi_val:.1f} >= 70 (Sinal de Venda Absoluto)"
+        return False, f"Abortado: Mercado em zona de indecisão (RSI Neutro: {rsi_val:.1f} < 70)", None
     else:
         return False, f"Abortado: Direção inválida '{direction}'", None
 
-    # 2. PONTO DE CONFIRMAÇÃO 2: FILTRO ANTI-LATERALIZAÇÃO (ADX > 25)
-    if adx_val <= 25.0:
-        return False, f"Abortado: Falta de força direcional (ADX Baixo)", None
-
-    # 3. PONTO DE CONFIRMAÇÃO 3: REJEIÇÃO / FLUXO INSTITUCIONAL (Volume + Price Action)
-    vol_ratio = float(c["vol_ratio"]) if "vol_ratio" in c and not pd.isna(c["vol_ratio"]) else 1.0
-    has_vol_spike = vol_ratio >= 1.5
-
-    rng = float(c["high"] - c["low"])
-    wick_ratio = 0.0
-    if rng > 1e-8:
-        if direction == "BUY":
-            lower_wick = float(min(c["open"], c["close"]) - c["low"])
-            wick_ratio = lower_wick / rng
-        else:
-            upper_wick = float(c["high"] - max(c["open"], c["close"]))
-            wick_ratio = upper_wick / rng
-
-    has_wick_rejection = wick_ratio >= 0.60
-
-    if not (has_vol_spike or has_wick_rejection):
-        return False, f"Abortado: Ausência de fluxo institucional ou rejeição por pavio (Vol: {vol_ratio:.1f}x < 1.5x e Pavio: {wick_ratio*100:.0f}% < 60%)", None
-
-    evidences = []
-    if has_vol_spike:
-        evidences.append(f"Volume Spike {vol_ratio:.1f}x")
-    if has_wick_rejection:
-        evidences.append(f"Pinbar {wick_ratio*100:.0f}%")
-    evidence_str = " | ".join(evidences)
-
-    details = f"RSI {rsi_val:.0f} | ADX {adx_val:.0f} | {evidence_str}"
-    return True, None, details
-
 
 # --------------------------------------------------------------------- gatilhos
-def _check_alpha(df: pd.DataFrame) -> Optional[str]:
-    """Tendência + Pullback Extremo: EMAs alinhadas a favor da tendência maior,
-    com entrada estritamente no esgotamento do pullback validada pelo Triple Check."""
-    c = df.iloc[-1]
-    if c["ema20"] > c["ema50"] > c["ema200"]:
-        ok, _, _ = check_indecision_filters(df, "BUY")
-        if ok:
-            return "BUY"
-    elif c["ema20"] < c["ema50"] < c["ema200"]:
-        ok, _, _ = check_indecision_filters(df, "SELL")
-        if ok:
-            return "SELL"
-    return None
-
-
 class SignalResult(str):
-    """Representação de sinal com flag de autorização especial (Golden Ticket / force_execute)."""
+    """Representação de sinal com flag de autorização especial (Autonomia / force_execute)."""
     force_execute: bool = False
 
-    def __new__(cls, val: str, force_execute: bool = False):
+    def __new__(cls, val: str, force_execute: bool = True):
         obj = str.__new__(cls, val)
         obj.force_execute = force_execute
         return obj
 
 
 def analyze_market(df: pd.DataFrame, strategy: str = "ops_beta") -> Tuple[Optional[str], bool]:
-    """Análise quantitativa de sinal para agentes de reversão (Setor 1):
-    - Sinal de Compra: Se RSI <= 30.
-    - Sinal de Venda: Se RSI >= 70.
-    - Bypass de Veto (Golden Ticket): Se qualquer uma destas duas condições for atingida,
-      retorna force_execute = True (autorização suprema para entrar, ignorando vetos dos Setores 2 e 3).
+    """Análise quantitativa de sinal para agentes operacionais (Setor 1):
+    - Nova Regra de Compra Absoluta: Se RSI <= 30 -> BUY
+    - Nova Regra de Venda Absoluta: Se RSI >= 70 -> SELL
+    - Autonomia matemática direta com force_execute = True (sem poder de bloqueio do Setor 2).
     Retorna: (bias: Optional[str], force_execute: bool)
     """
     if df is None or len(df) == 0:
@@ -185,10 +133,18 @@ def analyze_market(df: pd.DataFrame, strategy: str = "ops_beta") -> Tuple[Option
     return None, False
 
 
+def _check_alpha(df: pd.DataFrame) -> Optional[SignalResult]:
+    """Tendência + Pullback Extremo: Nova regra absoluta por RSI."""
+    bias, force = analyze_market(df, strategy="ops_alpha")
+    if bias:
+        return SignalResult(bias, force_execute=force)
+    return None
+
+
 def _check_beta(df: pd.DataFrame) -> Optional[SignalResult]:
     """Reversão à Média + Exaustão Institucional por RSI Agressivo (Agente Beta):
-    - Gatilho de Compra: RSI <= 30 -> Golden Ticket (force_execute = True)
-    - Gatilho de Venda: RSI >= 70 -> Golden Ticket (force_execute = True)
+    - Gatilho de Compra: RSI <= 30 -> force_execute = True
+    - Gatilho de Venda: RSI >= 70 -> force_execute = True
     """
     bias, force = analyze_market(df, strategy="ops_beta")
     if bias:
@@ -196,99 +152,45 @@ def _check_beta(df: pd.DataFrame) -> Optional[SignalResult]:
     return None
 
 
-def _check_gamma(df: pd.DataFrame) -> Optional[str]:
-    """Rompimento / Breakout: Squeeze prévio de volatilidade rompendo em exaustão/pullback extremo."""
-    if len(df) < 60:
-        return None
-    c = df.iloc[-1]
-    window = df["bandwidth"].iloc[-120:].dropna()
-    if len(window) < 60:
-        return None
-    squeezed = df["bandwidth"].iloc[-7:-1].min() <= window.quantile(0.20)
-    expanding = c["atr"] > df["atr"].iloc[-4] * 1.03
-
-    if squeezed and expanding:
-        if c["close"] > c["bb_mid"]:
-            ok, _, _ = check_indecision_filters(df, "BUY")
-            if ok:
-                return "BUY"
-        if c["close"] < c["bb_mid"]:
-            ok, _, _ = check_indecision_filters(df, "SELL")
-            if ok:
-                return "SELL"
+def _check_gamma(df: pd.DataFrame) -> Optional[SignalResult]:
+    """Rompimento / Breakout: Nova regra absoluta por RSI."""
+    bias, force = analyze_market(df, strategy="ops_gamma")
+    if bias:
+        return SignalResult(bias, force_execute=force)
     return None
 
 
 def check_delta_strategy(df: pd.DataFrame, symbol: str = "BTCUSD") -> Tuple[bool, Optional[str]]:
-    """Avaliação quantitativa condicional da estratégia Agente Delta V2:
-    - Cripto (BTC, ETH, SOL): Coletor de derivativos Binance Futures (Funding Rate) + RSI < 20 + Volume Spike > 1.5.
-    - Ouro/Forex (XAUUSD, etc.): SMC Tradicional (RSI < 20 + ADX > 25 + Volume Spike > 1.5).
+    """Avaliação quantitativa autônoma do Agente Delta V2:
+    - Nova Regra Absoluta: Se RSI <= 30 (BUY) ou RSI >= 70 (SELL).
+    - Removidas as exigências de ADX > 25 e Volume Spike.
     """
     if len(df) < 20:
         return False, None
     c = df.iloc[-1]
     rsi_val = float(c["rsi"]) if "rsi" in c and not pd.isna(c["rsi"]) else 50.0
-    adx_val = float(c["adx"]) if "adx" in c and not pd.isna(c["adx"]) else 0.0
-    volume_spike = float(c["vol_ratio"]) if "vol_ratio" in c and not pd.isna(c["vol_ratio"]) else 1.0
 
-    if symbol in ["BTCUSD", "ETHUSD", "SOLUSD"]:
-        # É Cripto! Invoca o coletor de derivativos
-        deriv_data = derivatives_collector.get_crypto_derivatives(symbol)
-        # Se RSI < 20 (Exaustão) + Volume Spike + Funding Rate muito positivo (Retalho alavancado em Long)
-        if rsi_val < 20 and volume_spike > 1.5 and deriv_data.get("is_euphoric"):
-            return True, "Gatilho de Liquidation Sweep (Squeeze Institucional)"
-    else:
-        # É Ouro ou Forex! Mantém a estratégia SMC tradicional (FVG + Order Block + Triple Check)
-        if rsi_val < 20 and adx_val > 25 and volume_spike > 1.5:
-            return True, "SMC Clássico"
+    if rsi_val <= 30.0:
+        return True, f"Gatilho Autônomo Delta (RSI {rsi_val:.1f} <= 30)"
+    if rsi_val >= 70.0:
+        return True, f"Gatilho Autônomo Delta (RSI {rsi_val:.1f} >= 70)"
 
     return False, None
 
 
-def _check_delta(df: pd.DataFrame, symbol: str = "BTCUSD") -> Optional[str]:
-    """SMC Scalper / Liquidation Sweep (Agente Delta V2):
-    Varredura de liquidez com desvio condicional Cripto vs Forex/Ouro.
-    """
-    triggered, reason = check_delta_strategy(df, symbol=symbol)
-    if triggered:
-        log.info("[Ops Delta] %s disparou: %s", symbol, reason)
-        return "BUY"
-
-    # Sweep de Fundo/Topo clássico como confluência de scalper
-    if len(df) >= 30:
-        swing = df.iloc[-23:-3]
-        swing_low, swing_high = swing["low"].min(), swing["high"].max()
-
-        # Sweep de Fundo (Liquidez abaixo de swing_low)
-        if (df["low"].iloc[-3:] < swing_low).any():
-            ok, _, _ = check_indecision_filters(df, "BUY")
-            if ok:
-                return "BUY"
-
-        # Sweep de Topo (Liquidez acima de swing_high)
-        if (df["high"].iloc[-3:] > swing_high).any():
-            ok, _, _ = check_indecision_filters(df, "SELL")
-            if ok:
-                return "SELL"
+def _check_delta(df: pd.DataFrame, symbol: str = "BTCUSD") -> Optional[SignalResult]:
+    """SMC Scalper / Liquidation Sweep com autonomia matemática direta."""
+    bias, force = analyze_market(df, strategy="ops_delta")
+    if bias:
+        return SignalResult(bias, force_execute=force)
     return None
 
 
-def _check_epsilon(df: pd.DataFrame) -> Optional[str]:
-    """Scalper VWAP + Momentum: Alinhamento da VWAP confirmado pelo Triple Check institucional."""
-    if len(df) < 30:
-        return None
-    c = df.iloc[-1]
-    price = float(c["close"])
-    vwap_val = float(c["vwap"]) if c["vwap"] is not None and not pd.isna(c["vwap"]) else price
-
-    if price >= vwap_val:
-        ok, _, _ = check_indecision_filters(df, "BUY")
-        if ok:
-            return "BUY"
-    elif price <= vwap_val:
-        ok, _, _ = check_indecision_filters(df, "SELL")
-        if ok:
-            return "SELL"
+def _check_epsilon(df: pd.DataFrame) -> Optional[SignalResult]:
+    """Scalper VWAP + Momentum com autonomia matemática direta."""
+    bias, force = analyze_market(df, strategy="ops_epsilon")
+    if bias:
+        return SignalResult(bias, force_execute=force)
     return None
 
 
@@ -371,7 +273,9 @@ class Sentinel:
     def __init__(self, bridge: MT5Bridge, db: Optional[Any] = None) -> None:
         self.bridge = bridge
         self.db = db
-        self._last_signal: Dict[tuple, str] = {}  # evita reacionar ao mesmo candle
+        # Anti-spam tick a tick: restrito a 1 tiro por formação de vela
+        self.last_bar_time: Dict[Tuple[str, str], str] = {}
+        self._last_signal = self.last_bar_time
 
     def _snapshot(self, symbol: str, agent_id: str, strategy: str, trigger: str, bias: str,
                   df: pd.DataFrame, force_execute: bool = False) -> dict:
@@ -401,7 +305,7 @@ class Sentinel:
 
     def scan_symbol(self, symbol: str, active_agents: Optional[Dict[str, str]] = None,
                     agent_params: Optional[Dict[str, dict]] = None) -> List[dict]:
-        """`active_agents`: {agent_id: estratégia-base}. Retorna gatilhos validados e imunizados."""
+        """`active_agents`: {agent_id: estratégia-base}. Retorna gatilhos matemáticos validados."""
         if active_agents is None:
             active_agents = {a: a for a in CHECKS}
         frames: Dict[str, Optional[pd.DataFrame]] = {}  # um cálculo por timeframe
@@ -417,12 +321,17 @@ class Sentinel:
             if df is None:
                 continue
             candle_time = str(df.iloc[-1]["time"])
+
+            # 4. ANTI-SPAM TICK A TICK: Restrito a 1 tiro por formação de vela
+            if self.last_bar_time.get((symbol, agent_id)) == candle_time:
+                continue
+
             try:
                 check_res = check(df, symbol=symbol)
             except TypeError:
                 check_res = check(df)
 
-            force_execute = False
+            force_execute = True
             if isinstance(check_res, tuple):
                 bias, force_execute = check_res
             elif hasattr(check_res, "force_execute"):
@@ -438,42 +347,23 @@ class Sentinel:
             if bias:
                 label = agent_id.replace("ops_", "Ops ").title()
 
-                # 1. Validação de Filtros ou Bypass de Veto (Golden Ticket)
-                if force_execute:
-                    approved = True
-                    details = f"RSI {float(df.iloc[-1].get('rsi', 50)):.1f} [GOLDEN TICKET / PASSE LIVRE]"
-                    log.info("[%s] %s -> GOLDEN TICKET ATIVADO (%s): Bypass total de indecisão e vetos!",
-                             label, symbol, details)
-                else:
-                    # Blindagem Obrigatória: Validação Final Confluente do Triple Check
-                    approved, abort_reason, details = check_indecision_filters(df, bias)
-                    if not approved:
-                        log.info("[%s] %s -> %s", label, symbol, abort_reason)
-                        continue
+                # 1. Autonomia Matemática Direta do Setor 1:
+                # Disparo imediato se RSI no alvo (<=30 BUY ou >=70 SELL)
+                rsi_curr = float(df.iloc[-1].get("rsi", 50))
+                details = f"RSI {rsi_curr:.1f} [AUTONOMIA MATEMÁTICA DIRETA]"
 
-                # 2. Checagem rigorosa de Vacinas Pós-Morte do Setor 3 (ignorada sob Golden Ticket)
-                if not force_execute:
-                    vaccines = []
-                    if agent_params and agent_id in agent_params:
-                        vaccines = agent_params[agent_id].get("vaccines") or []
-                    elif self.db:
-                        vaccines = self.db.get_strategy_params(agent_id).get("vaccines") or []
-
-                    vaccine_abort = check_vaccines(agent_id, bias, df, vaccines)
-                    if vaccine_abort:
-                        log.warning("[%s] Gatilho acionado, mas ABORTADO pela %s.", label, vaccine_abort)
-                        continue
+                # 2. Registrar trava anti-spam para evitar múltiplos tiros no mesmo candle
+                self.last_bar_time[(symbol, agent_id)] = candle_time
+                self._last_signal[(symbol, agent_id)] = candle_time
 
                 # 3. Log Limpo e Vitorioso
                 order_desc = "Compra" if bias == "BUY" else "Venda"
-                log.info("[%s] GATILHO APROVADO: %s -> Ordem de %s enviada! (force_execute=%s)",
-                         label, details, order_desc, force_execute)
+                log.info("[%s] GATILHO APROVADO: %s -> Ordem de %s enviada imediatamente!",
+                         label, details, order_desc)
 
-                if self._last_signal.get((symbol, agent_id)) != candle_time:
-                    self._last_signal[(symbol, agent_id)] = candle_time
-                    triggers.append(self._snapshot(symbol, agent_id, strategy,
-                                                   TRIGGER_NAMES.get(strategy, "SIGNAL"),
-                                                   bias, df, force_execute=force_execute))
+                triggers.append(self._snapshot(symbol, agent_id, strategy,
+                                               TRIGGER_NAMES.get(strategy, "SIGNAL"),
+                                               bias, df, force_execute=True))
         return triggers
 
     def _log_strategy_proximity(self, agent_id: str, strategy: str, symbol: str,

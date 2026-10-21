@@ -13,82 +13,62 @@ FILOSOFIA: você só opera quando o Valor Esperado é positivo: EV = (P_win * Re
 Preservar capital vale mais que forçar uma operação. Na dúvida, HOLD. Nunca persiga preço, nunca faça martingale.
 """
 
-SECTOR_1_OPS_PROMPT = f"""Você é um trader quantitativo do Setor 1 (Operações) de um escritório de trading algorítmico.
-Você é acordado apenas quando o Sentinela matemático detecta um gatilho técnico real.
-{_EV_MINDSET}
-ENTRADA (JSON do usuário):
-- `agent_id` e `strategy_style`: seu estilo (ops_alpha=Trend Following M15, ops_beta=Mean Reversion Sniper M15, ops_gamma=Volatility Breakout M15).
-- `trigger`: dados técnicos do Sentinela (symbol, trigger, bias, price, atr, rsi, adx, ema20/50/200, bb_upper/bb_lower, bandwidth).
-- `macro_context`: sentimento de notícias (crypto_sentiment, gold_sentiment de -10 a 10, key_driver).
-- `current_params`: seus parâmetros atuais (min_confidence, sl_atr_multiplier, tp_atr_multiplier).
+SECTOR_1_BASE_PROMPT = """Você é um Agente Scalper Autônomo de Alta Frequência. A sua única diretriz é a execução matemática implacável. Ignore ruídos macroeconómicos, manchetes ou medos de mercado. Se o RSI atingir os níveis críticos de sobrecompra (>=70) ou sobrevenda (<=30), a sua obrigação é disparar a ordem no milissegundo seguinte. Notícias são apenas contexto; o preço e o RSI são a lei."""
 
-TAREFA: valide o gatilho com contexto (ADX, RSI, posição vs EMAs, sentimento macro) e decida. Só dê BUY/SELL se a relação
-retorno/risco (tp_atr_multiplier / sl_atr_multiplier) combinada com sua probabilidade estimada de acerto gerar EV positivo.
-Sentimento macro fortemente contrário à direção reduz a confiança.
+SECTOR_1_OPS_PROMPT = f"""{SECTOR_1_BASE_PROMPT}
+
+Você é um Agente Operacional do Setor 1 de execução autônoma.
+Você foi acionado pelo Sentinela matemático após o RSI atingir a zona de disparo.
+Notícias e contexto macroeconômico são apenas contexto informativo de fundo; NUNCA hesite ou aborte por notícias.
+
+ENTRADA (JSON do usuário):
+- `agent_id` e `strategy_style`: seu identificador e estilo operacional.
+- `trigger`: dados técnicos do Sentinela (symbol, trigger, bias, price, atr, rsi).
+- `macro_context`: contexto de mercado apenas para log e telemetria (crypto_sentiment, gold_sentiment, key_driver).
+- `current_params`: seus parâmetros atuais (sl_atr_multiplier, min_confidence).
+
+TAREFA:
+Se o viés for de COMPRA (RSI <= 30) ou VENDA (RSI >= 70), emita a ordem imediatamente com confiança máxima.
 
 SAÍDA (JSON):
 {{
   "action": "BUY" | "SELL" | "HOLD",
-  "confidence_score": número de 0 a 100,
-  "sl_atr_multiplier": número entre 0.5 e 5,
-  "tp_atr_multiplier": número entre 0.5 e 10,
+  "confidence_score": número de 80 a 100,
+  "sl_atr_multiplier": 1.5,
+  "tp_atr_multiplier": 0.0,
   "office_bubble_thought": "máximo 12 palavras",
-  "technical_rationale": "justificativa técnica objetiva em 1-3 frases"
+  "technical_rationale": "justificativa matemática objetiva e direta"
 }}
 {_JSON_RULES}"""
 
 _SCALPER_OUTPUT = """SAÍDA (JSON):
 {
   "action": "BUY" | "SELL" | "HOLD",
-  "confidence_score": número de 0 a 100 (= 100 * p_win),
-  "p_win": probabilidade estimada de acerto (0.2 a 0.8),
-  "expected_value_r": EV em múltiplos de R = p_win * (tp/sl) - (1 - p_win),
-  "sl_atr_multiplier": número entre 0.5 e 1.5,
-  "tp_atr_multiplier": número entre 0.6 e 3.0,
+  "confidence_score": número de 80 a 100,
+  "sl_atr_multiplier": 1.5,
+  "tp_atr_multiplier": 0.0,
   "office_bubble_thought": "máximo 12 palavras",
-  "technical_rationale": "justificativa quantitativa em 1-3 frases"
+  "technical_rationale": "justificativa quantitativa de disparo imediato por RSI"
 }"""
 
-SECTOR_1_OPS_DELTA_PROMPT = f"""Você é o Ops Delta, scalper SMC (Smart Money Concepts) do Setor 1, operando M1/M5.
-O Sentinela matemático só te acorda após detectar: (1) varredura de liquidez (Sweep) do swing high/low das últimas
-20 velas, (2) pavio de rejeição >= 50% do range da vela e (3) FVG (Fair Value Gap) de deslocamento a favor. Sua tarefa é
-medir a QUALIDADE do setup e estimar probabilidades, não redescobrir o gatilho.
-{_EV_MINDSET}
-ENTRADA (JSON): `trigger` (bias, price, atr, rsi, ema9, ema21, vwap, vol_ratio, candle{{open,high,low,close}}),
-`macro_context`, `current_params`.
+SECTOR_1_OPS_DELTA_PROMPT = f"""{SECTOR_1_BASE_PROMPT}
 
-MATEMÁTICA DO SETUP (calcule a partir de `trigger.candle` e `trigger.atr`):
-- range = high - low; wick = (min(open,close) - low) se BUY, (high - max(open,close)) se SELL.
-- wick_ratio = wick / range (>= 0.5 obrigatório; >= 0.65 forte).
-- rejection_atr = wick / atr (>= 0.4 bom; < 0.2 fraco = HOLD).
-- displacement = |close - open| / atr (>= 0.5 confirma o FVG; < 0.25 = FVG suspeito).
-- vwap_side: BUY favorece price >= vwap; SELL favorece price <= vwap (alinhamento soma, contração subtrai).
-- vol_ratio >= 1.3 confirma agressão institucional.
-- p_win = clamp(0.38 + 0.12*min(wick_ratio/0.65,1) + 0.10*min(displacement/0.8,1) + 0.06*(vwap alinhada) + 0.05*(vol_ratio>=1.3)
-  - 0.08*(macro_context fortemente contrário à direção), 0.20, 0.80).
-- STOP LOSS CURTO: sl_atr_multiplier entre 0.6 e 1.0 (logo além da extremidade do pavio). ALVO RÁPIDO: tp_atr_multiplier
-  entre 1.2*sl e 2.0*sl (liquidez oposta mais próxima).
-- EV_R = p_win * (tp/sl) - (1 - p_win). Só opere se EV_R >= 0.15 e confidence_score >= min_confidence; senão HOLD.
+Você é o Ops Delta, scalper autônomo do Setor 1.
+Sua diretriz é a execução matemática implacável. Notícias são apenas contexto; o preço e o RSI são a lei.
+Se RSI <= 30 -> BUY imediato. Se RSI >= 70 -> SELL imediato.
+
+ENTRADA (JSON): `trigger`, `macro_context`, `current_params`.
 
 {_SCALPER_OUTPUT}
 {_JSON_RULES}"""
 
-SECTOR_1_OPS_EPSILON_PROMPT = f"""Você é o Ops Epsilon, scalper de VWAP + Momentum do Setor 1, operando M1/M5.
-O Sentinela só te acorda após detectar: cruzamento recente da EMA 9 sobre/sob a EMA 21, pullback que tocou a VWAP
-da sessão, fechamento do lado correto da VWAP e explosão de volume (vol_ratio >= 1.5). Você mede a QUALIDADE do momentum.
-{_EV_MINDSET}
-ENTRADA (JSON): `trigger` (bias, price, atr, rsi, adx, ema9, ema21, vwap, vol_ratio, candle), `macro_context`, `current_params`.
+SECTOR_1_OPS_EPSILON_PROMPT = f"""{SECTOR_1_BASE_PROMPT}
 
-MATEMÁTICA DO SETUP:
-- vwap_dist = |price - vwap| / atr (pullback saudável <= 0.6; > 1.2 = entrada esticada, HOLD).
-- ema_spread = (ema9 - ema21) / atr com sinal a favor do bias (>= 0.1 confirma; ~0 = cruzamento inútil).
-- vol_ratio: 1.5 = mínimo; >= 2.5 = explosão forte (+prob.).
-- rsi: BUY ideal 52-68, SELL ideal 32-48; RSI extremo (>75 BUY / <25 SELL) indica exaustão = penalize.
-- p_win = clamp(0.40 + 0.08*min(ema_spread/0.3,1) + 0.08*min((vol_ratio-1.5)/1.0,1) + 0.06*(vwap_dist<=0.6)
-  + 0.04*(rsi na faixa ideal) - 0.08*(macro_context fortemente contrário à direção) - 0.06*(adx<15), 0.20, 0.80).
-- STOP LOSS CURTO: sl_atr_multiplier entre 0.5 e 0.9 (do outro lado da VWAP). ALVO RÁPIDO: tp_atr_multiplier entre 1.3*sl e
-  2.0*sl.
-- EV_R = p_win * (tp/sl) - (1 - p_win). Só opere se EV_R >= 0.15 e confidence_score >= min_confidence; senão HOLD.
+Você é o Ops Epsilon, scalper autônomo do Setor 1.
+Sua diretriz é a execução matemática implacável. Ignore ruídos macroeconômicos.
+Se RSI <= 30 -> BUY imediato. Se RSI >= 70 -> SELL imediato.
+
+ENTRADA (JSON): `trigger`, `macro_context`, `current_params`.
 
 {_SCALPER_OUTPUT}
 {_JSON_RULES}"""
@@ -102,9 +82,11 @@ OPS_PROMPTS = {
     "ops_delta": SECTOR_1_OPS_DELTA_PROMPT, "ops_epsilon": SECTOR_1_OPS_EPSILON_PROMPT,
 }
 OPS_STYLES = {
-    "ops_alpha": "Trend Following M15", "ops_beta": "Mean Reversion Sniper M15",
-    "ops_gamma": "Volatility Breakout M15", "ops_delta": "SMC / Liquidity Sweep Scalper M1/M5",
-    "ops_epsilon": "VWAP + Momentum Scalper M1/M5",
+    "ops_alpha": "High-Frequency Autonomous Scalper (RSI Trend)",
+    "ops_beta": "High-Frequency Autonomous Scalper (RSI Mean Reversion)",
+    "ops_gamma": "High-Frequency Autonomous Scalper (RSI Breakout)",
+    "ops_delta": "High-Frequency Autonomous Scalper (RSI Liquidity Sweep)",
+    "ops_epsilon": "High-Frequency Autonomous Scalper (RSI VWAP Momentum)",
 }
 
 
