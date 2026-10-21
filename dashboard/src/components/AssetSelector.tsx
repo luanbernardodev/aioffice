@@ -163,11 +163,13 @@ export const AssetSelector: React.FC<AssetSelectorProps> = ({
 
   return (
     <div
-      className={`flex items-center gap-2.5 bg-slate-950/85 backdrop-blur-md border border-slate-800/80 rounded-full px-3 py-1.5 shadow-xl font-mono text-xs select-none ${className}`}
+      className={`flex items-center gap-2 font-mono text-xs select-none flex-wrap justify-center ${
+        className || 'bg-slate-950/85 backdrop-blur-md border border-slate-800/80 rounded-full px-3 py-1.5 shadow-xl'
+      }`}
       title="Painel de Controlo de Ativos (Filtragem Dinâmica do Sentinela)"
     >
       {/* Título de Seção & Badge de Status */}
-      <div className="flex items-center gap-1.5 text-slate-300 pr-1 border-r border-slate-800">
+      <div className="flex items-center gap-1.5 text-slate-300 pr-1 border-r border-slate-800/80">
         <Activity className={`w-3.5 h-3.5 ${isSyncing ? 'text-amber-400 animate-spin' : 'text-cyan-400'}`} />
         <span className="font-bold tracking-wider text-[11px] text-slate-200 uppercase hidden sm:inline">
           Ativos:
@@ -178,7 +180,7 @@ export const AssetSelector: React.FC<AssetSelectorProps> = ({
       </div>
 
       {/* 4 Botões de Toggle (Interruptores) Elegantes */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 flex-wrap justify-center">
         {SUPPORTED_ASSETS.map((asset) => {
           const isActive = activeAssets.includes(asset.symbol);
           const isPending = updatingSymbol === asset.symbol;

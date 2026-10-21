@@ -25,7 +25,7 @@ import threading
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import schedule
 
@@ -34,7 +34,7 @@ from agents import (sector_1_ops, sector_2_news, sector_3_analytics, sector_4_rn
 from agents.claude_client import ClaudeClient
 from config import settings
 from core.database import DatabaseManager, strategy_of
-from core.mt5_bridge import MT5Bridge
+from core.mt5_bridge import MT5Bridge, managed_positions
 from core.news_collector import NewsCollector
 from core.sentinel import Sentinel
 
@@ -53,11 +53,13 @@ class QuantOffice:
         self._stop_event = threading.Event()
 
     def monitor_open_positions_and_close(self):
-        """Loop de Fecho Dinâmico por RSI:
-        Monitora todas as posições abertas no MT5 e fecha a mercado conforme as regras dinâmicas de RSI:
-        - Posição BUY fecha se RSI >= 60.
-        - Posição SELL fecha se RSI <= 40.
-        - Envia atualização para trades_history no Supabase (status 'CLOSED', calculando lucro/perda real).
+        """Loop de Gestão de Risco Ativa (Break-Even e Parcial) & Fecho Dinâmico por RSI:
+        1. Rastreamento de tickets em managed_positions: {'partial_taken': False, 'breakeven_set': False}.
+        2. Alvo 1 (1.5x ATR a favor):
+           - Realização Parcial (50% do volume a mercado).
+           - Break-Even: SL ajustado para entry_price + micro spread.
+        3. Alvo Final: Fecho Dinâmico por RSI para o lote remanescente (BUY fecha se RSI >= 60, SELL fecha se RSI <= 40).
+        4. Limpeza contínua de memória para tickets encerrados.
         """
         return self.bridge.monitor_open_positions_and_close(self.db)
 

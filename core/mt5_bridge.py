@@ -2,7 +2,7 @@
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -10,6 +10,10 @@ import pandas as pd
 from config import settings
 
 log = logging.getLogger("mt5")
+
+# Dicionário global de rastreamento de gestão de risco ativa (Break-Even e Realização Parcial)
+# Formato: {ticket: {'partial_taken': bool, 'breakeven_set': bool}}
+managed_positions: Dict[int, Dict[str, Any]] = {}
 
 try:  # MetaTrader5 só existe no Windows
     import MetaTrader5 as mt5  # type: ignore
@@ -531,12 +535,79 @@ class MT5Bridge:
             "comment": getattr(result, "comment", ret_msg),
         }
 
+    def calculate_partial_volume(self, symbol: str, current_volume: float) -> float:
+        """Calcula 50% do volume da posição normalizado pelo volume_step e volume_min do ativo."""
+        half_vol = current_volume / 2.0
+        vol_min = 0.01
+        vol_step = 0.01
+
+        if not self.mock and mt5 is not None and self.connected:
+            info = mt5.symbol_info(resolve_symbol(symbol))
+            if info:
+                vol_min = getattr(info, "volume_min", 0.01) or 0.01
+                vol_step = getattr(info, "volume_step", 0.01) or 0.01
+        else:
+            spec = MOCK_SPECS.get(symbol, DEFAULT_SPEC)
+            vol_min = spec.get("min_lot", 0.01)
+            vol_step = 0.01
+
+        step_str = f"{vol_step:.8f}".rstrip("0")
+        decimals = len(step_str.split(".")[1]) if "." in step_str else 2
+
+        if vol_step > 0:
+            norm_vol = np.floor(half_vol / vol_step) * vol_step
+            norm_vol = round(float(norm_vol), decimals)
+        else:
+            norm_vol = round(half_vol, 2)
+
+        if norm_vol < vol_min:
+            return 0.0
+        return norm_vol
+
+    def modify_position_sltp(self, ticket: int, symbol: str, sl: float, tp: float = 0.0) -> Dict[str, Any]:
+        """Modifica o Stop Loss e Take Profit de uma posição aberta no MT5 (TRADE_ACTION_SLTP)."""
+        if self.mock:
+            log.info("[MOCK SLTP] Posição #%s modificada: SL=%.5f, TP=%.5f", ticket, sl, tp)
+            return {"success": True, "ticket": ticket, "sl": sl, "tp": tp, "mock": True}
+
+        actual_symbol = resolve_symbol(symbol)
+        mt5.symbol_select(actual_symbol, True)
+        digits = 2 if "JPY" in actual_symbol or "BTC" in actual_symbol else 5
+        sym_info = mt5.symbol_info(actual_symbol)
+        if sym_info:
+            digits = getattr(sym_info, "digits", digits)
+
+        sl = round(float(sl), digits)
+        tp = round(float(tp), digits)
+
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": ticket,
+            "symbol": actual_symbol,
+            "sl": sl,
+            "tp": tp,
+        }
+        result = mt5.order_send(request)
+        if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+            log.info("[BREAK-EVEN / SLTP] Posição #%s modificada com sucesso no MT5! Novo SL: %.5f | TP: %.5f",
+                     ticket, sl, tp)
+            return {"success": True, "ticket": ticket, "sl": sl, "tp": tp, "retcode": result.retcode, "mock": False}
+
+        retcode = getattr(result, "retcode", None)
+        ret_msg = describe_retcode(retcode)
+        log.error("Falha ao modificar SL/TP da posição #%s: %s (retcode=%s)", ticket, ret_msg, retcode)
+        return {"success": False, "ticket": ticket, "retcode": retcode, "comment": ret_msg, "mock": False}
+
     def monitor_open_positions_and_close(self, db: Optional[Any] = None) -> List[Dict[str, Any]]:
-        """Loop de Fecho Dinâmico por RSI:
-        Monitora todas as posições abertas e executa fechamento a mercado via regras de RSI:
-        - Regra de Fecho Compra (BUY): Se posição for COMPRA e RSI atual >= 60 -> fecha a mercado.
-        - Regra de Fecho Venda (SELL): Se posição for VENDA e RSI atual <= 40 -> fecha a mercado.
-        - Envia atualização para trades_history no Supabase (status='CLOSED', calculando lucro/perda real).
+        """Loop de Gestão de Risco Ativa (Break-Even e Parcial) & Fecho Dinâmico por RSI:
+        1. Rastreamento em managed_positions: {'partial_taken': bool, 'breakeven_set': bool}.
+        2. Gatilho de Alvo 1 (1.5x ATR a favor da operação):
+           - Executa Realização Parcial (fecha 50% do lote a mercado).
+           - Move Stop Loss para o Break-Even (preço de entrada + micro spread).
+        3. Fecho Dinâmico Final por RSI:
+           - Posição COMPRA (BUY) fecha remanescente se RSI >= 60.
+           - Posição VENDA (SELL) fecha remanescente se RSI <= 40.
+        4. Limpeza contínua do dicionário managed_positions para evitar vazamento de memória.
         """
         if db is None:
             from core.database import DatabaseManager
@@ -549,9 +620,12 @@ class MT5Bridge:
         if not self.mock and mt5 is not None and self.connected:
             self.ensure_connection()
             positions = mt5.positions_get()
+            active_tickets = set()
+
             if positions:
                 for pos in positions:
                     ticket = int(pos.ticket)
+                    active_tickets.add(ticket)
                     symbol = str(pos.symbol)
                     pos_type = "BUY" if pos.type == mt5.ORDER_TYPE_BUY else "SELL"
                     volume = float(pos.volume)
@@ -559,9 +633,48 @@ class MT5Bridge:
                     current_price = float(pos.price_current)
                     floating_pnl = float(pos.profit)
 
-                    # Leitura do RSI atual do ativo
-                    curr_rsi = self.get_current_rsi(symbol)
+                    # 1. Dicionário de Controle de Posições (Memória de Gestão)
+                    if ticket not in managed_positions:
+                        managed_positions[ticket] = {'partial_taken': False, 'breakeven_set': False}
 
+                    # 2. Lógica de Break-Even e Parcial (Alvo 1: 1.5x ATR a favor)
+                    gain = (current_price - entry_price) if pos_type == "BUY" else (entry_price - current_price)
+                    atr_val = self.get_current_atr(symbol, "M15", 14)
+                    target_distance = max(1.5 * atr_val, entry_price * 0.003)
+
+                    if gain >= target_distance:
+                        # A) Executar Parcial (50% do volume)
+                        if not managed_positions[ticket]['partial_taken']:
+                            partial_vol = self.calculate_partial_volume(symbol, volume)
+                            if 0 < partial_vol < volume:
+                                log.info("[GESTÃO ATIVA - ALVO 1] Posição MT5 #%s (%s %s) atingiu 1.5x ATR (+%.2f pts). Executando Parcial de %s lotes...",
+                                         ticket, pos_type, symbol, gain, partial_vol)
+                                p_res = self.close_position(ticket=ticket, symbol=symbol, volume=partial_vol, comment="Partial 50%")
+                                if p_res.get("success"):
+                                    managed_positions[ticket]['partial_taken'] = True
+                                    remaining_vol = round(volume - partial_vol, 2)
+                                    db._update("trades_history", {"volume": remaining_vol}, {"ticket_mt5": ticket})
+                                    log.info("[REALIZAÇÃO PARCIAL EXECUTADA] Posição #%s: 50%% encerrada. Volume remanescente: %s",
+                                             ticket, remaining_vol)
+
+                        # B) Acionar Break-Even
+                        if not managed_positions[ticket]['breakeven_set']:
+                            sym_info = mt5.symbol_info(resolve_symbol(symbol))
+                            pt = getattr(sym_info, "point", 0.01) or 0.01
+                            sp = getattr(sym_info, "spread", 10) or 10
+                            micro_spread = max(sp * pt, entry_price * 0.0002)
+                            be_sl = (entry_price + micro_spread) if pos_type == "BUY" else (entry_price - micro_spread)
+                            curr_tp = float(getattr(pos, "tp", 0.0) or 0.0)
+
+                            be_res = self.modify_position_sltp(ticket=ticket, symbol=symbol, sl=be_sl, tp=curr_tp)
+                            if be_res.get("success"):
+                                managed_positions[ticket]['breakeven_set'] = True
+                                db._update("trades_history", {"sl": be_sl}, {"ticket_mt5": ticket})
+                                log.info("[BREAK-EVEN ATIVADO] Posição #%s (%s %s) protegida! SL movido para %.5f",
+                                         ticket, pos_type, symbol, be_sl)
+
+                    # 3. Fecho Dinâmico Final por RSI (Alvo Final para o restante do lote)
+                    curr_rsi = self.get_current_rsi(symbol)
                     should_close = False
                     reason = ""
                     if pos_type == "BUY" and curr_rsi >= 60.0:
@@ -604,6 +717,9 @@ class MT5Bridge:
                             })
                             db.close_trade(ticket, floating_pnl, exit_price, outcome=reason)
 
+                            # Remove da memória de gestão
+                            managed_positions.pop(ticket, None)
+
                             closed_list.append({
                                 "ticket": ticket,
                                 "symbol": symbol,
@@ -614,16 +730,58 @@ class MT5Bridge:
                                 "reason": reason,
                             })
 
+            # Limpeza de memória: remove tickets que não estão mais abertos
+            for t in list(managed_positions.keys()):
+                if t not in active_tickets:
+                    managed_positions.pop(t, None)
+
         # Cenário 2: Modo Simulado / Mock
         else:
             open_trades = db.get_open_trades()
+            active_tickets = set()
+
             for trade in open_trades:
                 ticket = int(trade.get("id") or trade.get("ticket_mt5"))
+                active_tickets.add(ticket)
                 symbol = trade.get("symbol", "BTCUSD")
                 pos_type = str(trade.get("action") or trade.get("order_type") or "BUY").upper()
                 volume = float(trade.get("volume", 0.01))
                 entry_price = float(trade.get("entry_price", 0.0))
 
+                # 1. Dicionário de Controle de Posições (Memória de Gestão)
+                if ticket not in managed_positions:
+                    managed_positions[ticket] = {'partial_taken': False, 'breakeven_set': False}
+
+                current_price = self.get_price(symbol, "SELL" if pos_type == "BUY" else "BUY")
+
+                # 2. Lógica de Break-Even e Parcial (Alvo 1: 1.5x ATR a favor)
+                gain = (current_price - entry_price) if pos_type == "BUY" else (entry_price - current_price)
+                atr_val = self.get_current_atr(symbol, "M15", 14)
+                target_distance = max(1.5 * atr_val, entry_price * 0.003)
+
+                if gain >= target_distance:
+                    # A) Executar Parcial Mock (50% do volume)
+                    if not managed_positions[ticket]['partial_taken']:
+                        partial_vol = self.calculate_partial_volume(symbol, volume)
+                        if 0 < partial_vol < volume:
+                            log.info("[GESTÃO ATIVA MOCK - ALVO 1] Trade #%s (%s %s) atingiu 1.5x ATR (+%.2f pts). Realizando Parcial de %s lotes...",
+                                     ticket, pos_type, symbol, gain, partial_vol)
+                            managed_positions[ticket]['partial_taken'] = True
+                            remaining_vol = round(volume - partial_vol, 2)
+                            db._update("trades_history", {"volume": remaining_vol}, {"ticket_mt5": ticket})
+                            log.info("[REALIZAÇÃO PARCIAL MOCK] Trade #%s: 50%% garantido! Lote remanescente: %s",
+                                     ticket, remaining_vol)
+
+                    # B) Acionar Break-Even Mock
+                    if not managed_positions[ticket]['breakeven_set']:
+                        micro_spread = max(entry_price * 0.0002, 0.5 if "BTC" in symbol else 0.01)
+                        be_sl = (entry_price + micro_spread) if pos_type == "BUY" else (entry_price - micro_spread)
+                        managed_positions[ticket]['breakeven_set'] = True
+                        db._update("trades_history", {"sl": be_sl}, {"ticket_mt5": ticket})
+                        log.info("[BREAK-EVEN MOCK ATIVADO] Trade #%s (%s %s) protegido! SL movido para %.5f",
+                                 ticket, pos_type, symbol, be_sl)
+
+                # 3. Fecho Dinâmico Final por RSI (Alvo Final para o restante do lote)
                 curr_rsi = self.get_current_rsi(symbol)
                 should_close = False
                 reason = ""
@@ -635,7 +793,7 @@ class MT5Bridge:
                     reason = f"RSI_DYNAMIC_CLOSE_SELL (RSI {curr_rsi:.1f} <= 40)"
 
                 if should_close:
-                    exit_price = self.get_price(symbol, "SELL" if pos_type == "BUY" else "BUY")
+                    exit_price = current_price
                     spec = MOCK_SPECS.get(symbol, DEFAULT_SPEC)
                     contract = spec.get("contract", 1.0)
                     if pos_type == "BUY":
@@ -665,6 +823,9 @@ class MT5Bridge:
                     })
                     db.close_trade(ticket, round(real_pnl, 2), exit_price, outcome=reason)
 
+                    # Remove da memória de gestão
+                    managed_positions.pop(ticket, None)
+
                     closed_list.append({
                         "ticket": ticket,
                         "symbol": symbol,
@@ -674,6 +835,11 @@ class MT5Bridge:
                         "exit_price": exit_price,
                         "reason": reason,
                     })
+
+            # Limpeza de memória: remove tickets que não estão mais abertos
+            for t in list(managed_positions.keys()):
+                if t not in active_tickets:
+                    managed_positions.pop(t, None)
 
         return closed_list
 
