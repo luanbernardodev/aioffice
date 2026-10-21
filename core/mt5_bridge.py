@@ -277,6 +277,44 @@ class MT5Bridge:
         return {"volume": round(volume, 2), "risk_amount": round(volume * loss_per_lot, 2)}
 
     # ------------------------------------------------------------------ ordens
+    def get_current_atr(self, symbol: str, timeframe: str = "M15", period: int = 14) -> float:
+        """Calcula o ATR atual do ativo para dimensionamento dinâmico de Stop Loss médio."""
+        try:
+            rates = self.get_rates(symbol, timeframe, period + 30)
+            if rates is not None and len(rates) >= period + 1:
+                prev_close = rates["close"].shift(1)
+                tr = pd.concat([
+                    rates["high"] - rates["low"],
+                    (rates["high"] - prev_close).abs(),
+                    (rates["low"] - prev_close).abs()
+                ], axis=1).max(axis=1)
+                atr_series = tr.ewm(alpha=1 / period, adjust=False).mean()
+                atr_val = atr_series.iloc[-1]
+                if not pd.isna(atr_val) and atr_val > 0:
+                    return float(atr_val)
+        except Exception as exc:
+            log.warning("Falha ao calcular ATR dinâmico para %s: %s", symbol, exc)
+        try:
+            p = self.get_price(symbol, "BUY")
+            return p * 0.01
+        except Exception:
+            return 10.0
+
+    def get_current_rsi(self, symbol: str, timeframe: str = "M15", period: int = 14) -> float:
+        """Calcula o valor atual do RSI (14) para o ativo."""
+        try:
+            rates = self.get_rates(symbol, timeframe, period + 50)
+            if rates is not None and len(rates) >= period + 1:
+                delta = rates["close"].diff()
+                gain = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False).mean()
+                loss = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False).mean()
+                rs = gain / loss.replace(0, np.nan)
+                rsi_series = (100 - 100 / (1 + rs)).fillna(50)
+                return float(rsi_series.iloc[-1])
+        except Exception as exc:
+            log.warning("Falha ao calcular RSI para %s: %s", symbol, exc)
+        return 50.0
+
     def get_price(self, symbol: str, side: str) -> float:
         self.ensure_connection()
         if self.mock:
@@ -288,7 +326,8 @@ class MT5Bridge:
             raise RuntimeError(f"Sem tick para {symbol} ({actual_symbol})")
         return float(tick.ask if side == "BUY" else tick.bid)
 
-    def execute_order(self, symbol: str, action: str, volume: float, sl: float, tp: float,
+    def execute_order(self, symbol: str, action: str, volume: float,
+                      sl: Optional[float] = None, tp: Optional[float] = None,
                       comment: str = "quant-office", magic: int = 777777,
                       deviation: int = 10, agent_id: Optional[str] = None,
                       db: Optional[Any] = None) -> Dict[str, Any]:
@@ -300,7 +339,10 @@ class MT5Bridge:
            - trading_mode == 'DEMO' -> DEMO
            - trading_mode == 'REAL' e losses == 0 e não QUARANTINED -> REAL
            - trading_mode == 'REAL' e (losses > 0 ou QUARANTINED) -> DEMO (Shadow Trading)
-        4. Context Switching Seguro:
+        4. Parâmetros Adaptativos:
+           - Take Profit no MT5 = 0 (Nulo / Sem TP fixo, pois o fecho é ditado dinamicamente por RSI).
+           - Stop Médio: Calculado via 1.5x ATR atual (adaptação à volatilidade do mercado).
+        5. Context Switching Seguro:
            - Login na conta Target antes de mt5.order_send()
            - Logo após a execução, fallback reconectando na conta principal.
         """
@@ -344,13 +386,26 @@ class MT5Bridge:
             primary_creds = (self.demo_login, self.demo_password, self.demo_server)
 
         price = self.get_price(symbol, action)
+
+        # Regra 1: Take Profit Nulo no MT5 (0 / Sem TP fixo, pois é ditado dinamicamente por RSI)
+        tp = 0.0
+
+        # Regra 2: Stop Médio Dinâmico baseado em 1.5x o ATR atual (adaptável à volatilidade)
+        atr_val = self.get_current_atr(symbol, "M15", 14)
+        sign = 1 if action == "BUY" else -1
+        stop_dist = 1.5 * atr_val
+        sl = round(price - sign * stop_dist, 5)
+
         if self.mock:
             ticket_sintetico = int(time.time() * 1000) % 10**9
-            log.info("[MOCK ORDER] %s %s %.2f %s | Conta: %s | Modo: %s", aid, action, volume, symbol, target_account, trading_mode)
+            log.info("[MOCK ORDER] %s %s %.2f %s | Preço: %.5f | SL Médio (1.5x ATR): %.5f | TP: 0.0 (Sem TP) | Conta: %s | Modo: %s",
+                     aid, action, volume, symbol, price, sl, target_account, trading_mode)
             return {
                 "success": True,
                 "ticket": ticket_sintetico,
                 "price": price,
+                "sl": sl,
+                "tp": 0.0,
                 "mock": True,
                 "execution_account": target_account,
                 "trading_mode": trading_mode,
@@ -358,7 +413,8 @@ class MT5Bridge:
             }
 
         # 5. Context Switching Seguro: Conecta na conta Target antes de mt5.order_send()
-        log.info("[ROTEAMENTO MT5] Executando ordem de %s em conta %s (#%s)", aid, target_account, target_creds[0])
+        log.info("[ROTEAMENTO MT5] Executando ordem de %s em conta %s (#%s) | SL Médio: %.5f | TP: 0.0",
+                 aid, target_account, target_creds[0], sl)
         self.login_account(*target_creds)
 
         order_type = mt5.ORDER_TYPE_BUY if action == "BUY" else mt5.ORDER_TYPE_SELL
@@ -376,7 +432,7 @@ class MT5Bridge:
                     "type": order_type,
                     "price": price,
                     "sl": float(sl),
-                    "tp": float(tp),
+                    "tp": 0.0,  # TP Nulo / Sem TP fixo no MT5
                     "deviation": deviation,
                     "magic": magic,
                     "comment": f"{comment[:23]} [{target_account[:4]}]",
@@ -385,8 +441,8 @@ class MT5Bridge:
                 }
                 result = mt5.order_send(request)
                 if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
-                    log.info("Ordem MT5 executada com sucesso na conta %s: ticket=%s | preço=%.5f | magic=%d",
-                             target_account, result.order, result.price, magic)
+                    log.info("Ordem MT5 executada com sucesso na conta %s: ticket=%s | preço=%.5f | sl=%.5f | tp=0.0 | magic=%d",
+                             target_account, result.order, result.price, sl, magic)
                     success = True
                     break
         finally:
@@ -399,6 +455,8 @@ class MT5Bridge:
                 "success": True,
                 "ticket": result.order,
                 "price": result.price,
+                "sl": sl,
+                "tp": 0.0,
                 "mock": False,
                 "execution_account": target_account,
                 "trading_mode": trading_mode,
@@ -472,6 +530,152 @@ class MT5Bridge:
             "mock": False,
             "comment": getattr(result, "comment", ret_msg),
         }
+
+    def monitor_open_positions_and_close(self, db: Optional[Any] = None) -> List[Dict[str, Any]]:
+        """Loop de Fecho Dinâmico por RSI:
+        Monitora todas as posições abertas e executa fechamento a mercado via regras de RSI:
+        - Regra de Fecho Compra (BUY): Se posição for COMPRA e RSI atual >= 60 -> fecha a mercado.
+        - Regra de Fecho Venda (SELL): Se posição for VENDA e RSI atual <= 40 -> fecha a mercado.
+        - Envia atualização para trades_history no Supabase (status='CLOSED', calculando lucro/perda real).
+        """
+        if db is None:
+            from core.database import DatabaseManager
+            db = DatabaseManager()
+
+        closed_list: List[Dict[str, Any]] = []
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Cenário 1: MT5 Conectado (Live Real ou Demo no Terminal)
+        if not self.mock and mt5 is not None and self.connected:
+            self.ensure_connection()
+            positions = mt5.positions_get()
+            if positions:
+                for pos in positions:
+                    ticket = int(pos.ticket)
+                    symbol = str(pos.symbol)
+                    pos_type = "BUY" if pos.type == mt5.ORDER_TYPE_BUY else "SELL"
+                    volume = float(pos.volume)
+                    entry_price = float(pos.price_open)
+                    current_price = float(pos.price_current)
+                    floating_pnl = float(pos.profit)
+
+                    # Leitura do RSI atual do ativo
+                    curr_rsi = self.get_current_rsi(symbol)
+
+                    should_close = False
+                    reason = ""
+                    if pos_type == "BUY" and curr_rsi >= 60.0:
+                        should_close = True
+                        reason = f"RSI_DYNAMIC_CLOSE_BUY (RSI {curr_rsi:.1f} >= 60)"
+                    elif pos_type == "SELL" and curr_rsi <= 40.0:
+                        should_close = True
+                        reason = f"RSI_DYNAMIC_CLOSE_SELL (RSI {curr_rsi:.1f} <= 40)"
+
+                    if should_close:
+                        log.info("[FECHO DINÂMICO RSI] Posição #%s (%s %s) disparou fecho: %s | PnL atual: $%.2f",
+                                 ticket, pos_type, symbol, reason, floating_pnl)
+                        close_res = self.close_position(ticket=ticket, symbol=symbol, volume=volume,
+                                                         comment=f"RSI Close {curr_rsi:.1f}")
+                        if close_res.get("success"):
+                            exit_price = float(close_res.get("price") or current_price)
+                            pos_comment = str(getattr(pos, "comment", "") or "")
+                            exec_acc = "DEMO" if "[DEMO" in pos_comment else "REAL"
+
+                            existing = db._select("trades_history", eq={"ticket_mt5": ticket}, limit=1)
+                            agent_id = existing[0].get("agent_id") if (existing and existing[0].get("agent_id")) else (
+                                pos_comment if "ops_" in pos_comment else "ops_beta"
+                            )
+
+                            db.upsert_trade({
+                                "ticket_mt5": ticket,
+                                "agent_id": agent_id,
+                                "symbol": symbol,
+                                "order_type": pos_type,
+                                "volume": volume,
+                                "entry_price": entry_price,
+                                "close_price": exit_price,
+                                "current_price": exit_price,
+                                "profit_usd": floating_pnl,
+                                "status": "CLOSED",
+                                "exit_reason": reason,
+                                "closed_at": now_iso,
+                                "dry_run": False,
+                                "execution_account": exec_acc,
+                            })
+                            db.close_trade(ticket, floating_pnl, exit_price, outcome=reason)
+
+                            closed_list.append({
+                                "ticket": ticket,
+                                "symbol": symbol,
+                                "action": pos_type,
+                                "rsi": curr_rsi,
+                                "profit_usd": floating_pnl,
+                                "exit_price": exit_price,
+                                "reason": reason,
+                            })
+
+        # Cenário 2: Modo Simulado / Mock
+        else:
+            open_trades = db.get_open_trades()
+            for trade in open_trades:
+                ticket = int(trade.get("id") or trade.get("ticket_mt5"))
+                symbol = trade.get("symbol", "BTCUSD")
+                pos_type = str(trade.get("action") or trade.get("order_type") or "BUY").upper()
+                volume = float(trade.get("volume", 0.01))
+                entry_price = float(trade.get("entry_price", 0.0))
+
+                curr_rsi = self.get_current_rsi(symbol)
+                should_close = False
+                reason = ""
+                if pos_type == "BUY" and curr_rsi >= 60.0:
+                    should_close = True
+                    reason = f"RSI_DYNAMIC_CLOSE_BUY (RSI {curr_rsi:.1f} >= 60)"
+                elif pos_type == "SELL" and curr_rsi <= 40.0:
+                    should_close = True
+                    reason = f"RSI_DYNAMIC_CLOSE_SELL (RSI {curr_rsi:.1f} <= 40)"
+
+                if should_close:
+                    exit_price = self.get_price(symbol, "SELL" if pos_type == "BUY" else "BUY")
+                    spec = MOCK_SPECS.get(symbol, DEFAULT_SPEC)
+                    contract = spec.get("contract", 1.0)
+                    if pos_type == "BUY":
+                        real_pnl = (exit_price - entry_price) * contract * volume
+                    else:
+                        real_pnl = (entry_price - exit_price) * contract * volume
+
+                    log.info("[FECHO DINÂMICO RSI MOCK] Trade #%s (%s %s) encerrado por RSI %.1f! Lucro/Perda: $%.2f",
+                             ticket, pos_type, symbol, curr_rsi, real_pnl)
+
+                    self.close_position(ticket, symbol=symbol, volume=volume, comment=reason)
+                    db.upsert_trade({
+                        "ticket_mt5": ticket,
+                        "agent_id": trade.get("agent_id", "ops_beta"),
+                        "symbol": symbol,
+                        "order_type": pos_type,
+                        "volume": volume,
+                        "entry_price": entry_price,
+                        "close_price": exit_price,
+                        "current_price": exit_price,
+                        "profit_usd": round(real_pnl, 2),
+                        "status": "CLOSED",
+                        "exit_reason": reason,
+                        "closed_at": now_iso,
+                        "dry_run": bool(trade.get("dry_run", True)),
+                        "execution_account": trade.get("execution_account", "DEMO"),
+                    })
+                    db.close_trade(ticket, round(real_pnl, 2), exit_price, outcome=reason)
+
+                    closed_list.append({
+                        "ticket": ticket,
+                        "symbol": symbol,
+                        "action": pos_type,
+                        "rsi": curr_rsi,
+                        "profit_usd": round(real_pnl, 2),
+                        "exit_price": exit_price,
+                        "reason": reason,
+                    })
+
+        return closed_list
 
     # ------------------------------------------------------------------ sincronização de conta e ordens
     def sync_account_and_positions(self, db: Any = None) -> dict:

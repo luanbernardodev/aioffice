@@ -52,6 +52,15 @@ class QuantOffice:
         self.bridge.sync_account_and_positions(self.db)
         self._stop_event = threading.Event()
 
+    def monitor_open_positions_and_close(self):
+        """Loop de Fecho Dinâmico por RSI:
+        Monitora todas as posições abertas no MT5 e fecha a mercado conforme as regras dinâmicas de RSI:
+        - Posição BUY fecha se RSI >= 60.
+        - Posição SELL fecha se RSI <= 40.
+        - Envia atualização para trades_history no Supabase (status 'CLOSED', calculando lucro/perda real).
+        """
+        return self.bridge.monitor_open_positions_and_close(self.db)
+
     def check_quarantine_releases(self) -> List[str]:
         """Relógio de Quarentena Automático: verifica no Supabase (agents_status) agentes em QUARANTINED
         cujo quarantine_until <= NOW(). Executa UPDATE para IDLE e limpa quarantine_until."""
@@ -80,12 +89,18 @@ class QuantOffice:
                 # 2. Relógio de Quarentena Automático: Desbloqueia agentes quando quarantine_until <= NOW()
                 released = self.check_quarantine_releases()
 
-                # 3. Liquidação e acompanhamento de ordens em andamento
+                # 3. Fecho Dinâmico por RSI das Posições Abertas (BUY fecha se RSI >= 60, SELL fecha se RSI <= 40)
+                rsi_closed = self.monitor_open_positions_and_close()
+                if rsi_closed:
+                    log.info("[LOOP 1 - FECHO DINÂMICO RSI] %d posição(ões) encerrada(s) por RSI: %s",
+                             len(rsi_closed), rsi_closed)
+
+                # 4. Liquidação e acompanhamento de ordens em andamento por SL
                 settled_count = sector_1_ops.settle_open_trades(self.db, self.bridge)
                 if settled_count > 0:
-                    log.info("[LOOP 1] %d ordem(ns) liquidada(s) por TP/SL.", settled_count)
+                    log.info("[LOOP 1] %d ordem(ns) liquidada(s) por SL.", settled_count)
 
-                # 4. Monitor de risco de perdas consecutivas (Setor 5)
+                # 5. Monitor de risco de perdas consecutivas (Setor 5)
                 risk_events = sector_5_manager.process_closed_trades(self.db, self.claude)
                 for event in risk_events:
                     log.warning("[LOOP 1 - GESTÃO DE RISCO] %s",
@@ -325,6 +340,22 @@ def check_quarantine_releases(office: Optional[QuantOffice] = None) -> List[str]
         return office.check_quarantine_releases()
     db = DatabaseManager()
     return db.release_expired_quarantines()
+
+
+def monitor_open_positions_and_close(bridge: Optional[MT5Bridge] = None,
+                                     db: Optional[DatabaseManager] = None):
+    """Função de Fecho Dinâmico por RSI:
+    - Lista todas as posições abertas.
+    - Lê o RSI atual do ativo.
+    - Se BUY e RSI >= 60 -> fecha posição a mercado.
+    - Se SELL e RSI <= 40 -> fecha posição a mercado.
+    - Atualiza Supabase trades_history com status 'CLOSED' e lucro/perda real.
+    """
+    if bridge is None:
+        bridge = MT5Bridge()
+    if db is None:
+        db = DatabaseManager()
+    return bridge.monitor_open_positions_and_close(db)
 
 
 def run_autonomous_daemon(office: Optional[QuantOffice] = None) -> None:

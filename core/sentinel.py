@@ -153,24 +153,46 @@ def _check_alpha(df: pd.DataFrame) -> Optional[str]:
     return None
 
 
-def _check_beta(df: pd.DataFrame) -> Optional[str]:
-    """Reversão à Média + Exaustão Institucional:
-    Bollinger Bands + Triple Check Confluente de RSI extremo, ADX e fluxo/rejeição."""
+class SignalResult(str):
+    """Representação de sinal com flag de autorização especial (Golden Ticket / force_execute)."""
+    force_execute: bool = False
+
+    def __new__(cls, val: str, force_execute: bool = False):
+        obj = str.__new__(cls, val)
+        obj.force_execute = force_execute
+        return obj
+
+
+def analyze_market(df: pd.DataFrame, strategy: str = "ops_beta") -> Tuple[Optional[str], bool]:
+    """Análise quantitativa de sinal para agentes de reversão (Setor 1):
+    - Sinal de Compra: Se RSI <= 30.
+    - Sinal de Venda: Se RSI >= 70.
+    - Bypass de Veto (Golden Ticket): Se qualquer uma destas duas condições for atingida,
+      retorna force_execute = True (autorização suprema para entrar, ignorando vetos dos Setores 2 e 3).
+    Retorna: (bias: Optional[str], force_execute: bool)
+    """
+    if df is None or len(df) == 0:
+        return None, False
+
     c = df.iloc[-1]
-    close = float(c["close"])
-    bb_upper = float(c["bb_upper"])
-    bb_lower = float(c["bb_lower"])
+    rsi_val = float(c["rsi"]) if "rsi" in c and not pd.isna(c["rsi"]) else 50.0
 
-    if close <= bb_lower or float(c.get("rsi") or 50.0) < 20.0:
-        ok, _, _ = check_indecision_filters(df, "BUY")
-        if ok:
-            return "BUY"
+    if rsi_val <= 30.0:
+        return "BUY", True
+    if rsi_val >= 70.0:
+        return "SELL", True
 
-    if close >= bb_upper or float(c.get("rsi") or 50.0) > 85.0:
-        ok, _, _ = check_indecision_filters(df, "SELL")
-        if ok:
-            return "SELL"
+    return None, False
 
+
+def _check_beta(df: pd.DataFrame) -> Optional[SignalResult]:
+    """Reversão à Média + Exaustão Institucional por RSI Agressivo (Agente Beta):
+    - Gatilho de Compra: RSI <= 30 -> Golden Ticket (force_execute = True)
+    - Gatilho de Venda: RSI >= 70 -> Golden Ticket (force_execute = True)
+    """
+    bias, force = analyze_market(df, strategy="ops_beta")
+    if bias:
+        return SignalResult(bias, force_execute=force)
     return None
 
 
@@ -352,10 +374,11 @@ class Sentinel:
         self._last_signal: Dict[tuple, str] = {}  # evita reacionar ao mesmo candle
 
     def _snapshot(self, symbol: str, agent_id: str, strategy: str, trigger: str, bias: str,
-                  df: pd.DataFrame) -> dict:
+                  df: pd.DataFrame, force_execute: bool = False) -> dict:
         c = df.iloc[-1]
         return {
             "symbol": symbol, "agent_id": agent_id, "strategy": strategy, "trigger": trigger, "bias": bias,
+            "force_execute": force_execute,
             "timeframe": settings.STRATEGY_TIMEFRAMES.get(strategy, settings.TIMEFRAME),
             "candle_time": str(c["time"]),
             "price": round(float(c["close"]), 5), "atr": round(float(c["atr"]), 5),
@@ -395,43 +418,62 @@ class Sentinel:
                 continue
             candle_time = str(df.iloc[-1]["time"])
             try:
-                bias = check(df, symbol=symbol)
+                check_res = check(df, symbol=symbol)
             except TypeError:
-                bias = check(df)
+                check_res = check(df)
+
+            force_execute = False
+            if isinstance(check_res, tuple):
+                bias, force_execute = check_res
+            elif hasattr(check_res, "force_execute"):
+                bias = str(check_res)
+                force_execute = bool(check_res.force_execute)
+            else:
+                bias = check_res
 
             # Heartbeat Verbose Logging: Imprime distância do preço para o gatilho se VERBOSE_LOGS=True
             if getattr(settings, "VERBOSE_LOGS", True):
                 self._log_strategy_proximity(agent_id, strategy, symbol, df, bias)
 
             if bias:
-                # 1. Blindagem Obrigatória: Validação Final Confluente do Triple Check
-                approved, abort_reason, details = check_indecision_filters(df, bias)
                 label = agent_id.replace("ops_", "Ops ").title()
 
-                if not approved:
-                    log.info("[%s] %s -> %s", label, symbol, abort_reason)
-                    continue
+                # 1. Validação de Filtros ou Bypass de Veto (Golden Ticket)
+                if force_execute:
+                    approved = True
+                    details = f"RSI {float(df.iloc[-1].get('rsi', 50)):.1f} [GOLDEN TICKET / PASSE LIVRE]"
+                    log.info("[%s] %s -> GOLDEN TICKET ATIVADO (%s): Bypass total de indecisão e vetos!",
+                             label, symbol, details)
+                else:
+                    # Blindagem Obrigatória: Validação Final Confluente do Triple Check
+                    approved, abort_reason, details = check_indecision_filters(df, bias)
+                    if not approved:
+                        log.info("[%s] %s -> %s", label, symbol, abort_reason)
+                        continue
 
-                # 2. Checagem rigorosa de Vacinas Pós-Morte do Setor 3
-                vaccines = []
-                if agent_params and agent_id in agent_params:
-                    vaccines = agent_params[agent_id].get("vaccines") or []
-                elif self.db:
-                    vaccines = self.db.get_strategy_params(agent_id).get("vaccines") or []
+                # 2. Checagem rigorosa de Vacinas Pós-Morte do Setor 3 (ignorada sob Golden Ticket)
+                if not force_execute:
+                    vaccines = []
+                    if agent_params and agent_id in agent_params:
+                        vaccines = agent_params[agent_id].get("vaccines") or []
+                    elif self.db:
+                        vaccines = self.db.get_strategy_params(agent_id).get("vaccines") or []
 
-                vaccine_abort = check_vaccines(agent_id, bias, df, vaccines)
-                if vaccine_abort:
-                    log.warning("[%s] Gatilho acionado, mas ABORTADO pela %s.", label, vaccine_abort)
-                    continue
+                    vaccine_abort = check_vaccines(agent_id, bias, df, vaccines)
+                    if vaccine_abort:
+                        log.warning("[%s] Gatilho acionado, mas ABORTADO pela %s.", label, vaccine_abort)
+                        continue
 
-                # 3. Log Limpo e Vitorioso do Triple Check Aprovado
+                # 3. Log Limpo e Vitorioso
                 order_desc = "Compra" if bias == "BUY" else "Venda"
-                log.info("[%s] TRIPLE CHECK APROVADO: %s -> Ordem de %s enviada!",
-                         label, details, order_desc)
+                log.info("[%s] GATILHO APROVADO: %s -> Ordem de %s enviada! (force_execute=%s)",
+                         label, details, order_desc, force_execute)
 
                 if self._last_signal.get((symbol, agent_id)) != candle_time:
                     self._last_signal[(symbol, agent_id)] = candle_time
-                    triggers.append(self._snapshot(symbol, agent_id, strategy, TRIGGER_NAMES[strategy], bias, df))
+                    triggers.append(self._snapshot(symbol, agent_id, strategy,
+                                                   TRIGGER_NAMES.get(strategy, "SIGNAL"),
+                                                   bias, df, force_execute=force_execute))
         return triggers
 
     def _log_strategy_proximity(self, agent_id: str, strategy: str, symbol: str,

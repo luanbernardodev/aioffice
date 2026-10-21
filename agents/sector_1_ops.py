@@ -34,17 +34,25 @@ def run(trigger: Dict[str, Any], db: DatabaseManager, claude: ClaudeClient,
         return None
     weight = float(status.get("allocation_weight", 1.0))
 
+    force_execute = bool(trigger.get("force_execute", False))
+
     context = db.get_latest_market_context() or {}
     if context.get("red_flag_pause_trading"):
-        db.update_agent_status(agent_id, "IDLE", f"Red flag ativo: {symbol} fica de fora.")
-        return {"agent_id": agent_id, "action": "HOLD", "reason": "red_flag"}
+        if force_execute:
+            log.warning("[GOLDEN TICKET / BYPASS] Agente %s (force_execute=True) ignorou Red Flag de notícias do Setor 2!", agent_id)
+        else:
+            db.update_agent_status(agent_id, "IDLE", f"Red flag ativo: {symbol} fica de fora.")
+            return {"agent_id": agent_id, "action": "HOLD", "reason": "red_flag"}
     if weight <= 0:
         return None
-    # Gate macro: sem o OK (vigente) do Setor 3 nenhuma ordem chega ao MT5
+    # Gate macro: sem o OK (vigente) do Setor 3 nenhuma ordem chega ao MT5, exceto com Golden Ticket
     if not db.is_macro_ok(status):
         why = status.get("macro_reason") or "sem autorização macro vigente"
-        db.update_agent_status(agent_id, "IDLE", f"Veto macro do Setor 3: {why}")
-        return {"agent_id": agent_id, "symbol": symbol, "action": "HOLD", "reason": "macro_veto"}
+        if force_execute:
+            log.warning("[GOLDEN TICKET / BYPASS] Agente %s (force_execute=True) ignorou Veto Macro do Setor 3 (%s)!", agent_id, why)
+        else:
+            db.update_agent_status(agent_id, "IDLE", f"Veto macro do Setor 3: {why}")
+            return {"agent_id": agent_id, "symbol": symbol, "action": "HOLD", "reason": "macro_veto"}
 
     strategy = trigger.get("strategy") or strategy_of(status or agent_id)
     params = db.get_strategy_params(agent_id)
@@ -182,25 +190,32 @@ def execute_autonomous_trigger(trigger: Dict[str, Any], db: DatabaseManager,
     if weight <= 0:
         weight = 1.0
 
+    force_execute = bool(trigger.get("force_execute", False))
+
     context = db.get_latest_market_context() or {}
     if context.get("red_flag_pause_trading"):
-        db.update_agent_status(agent_id, "IDLE", f"Red flag de notícias ativo: {symbol} em espera.")
-        return {"agent_id": agent_id, "action": "HOLD", "reason": "red_flag"}
+        if force_execute:
+            log.warning("[GOLDEN TICKET / BYPASS] Agente %s (force_execute=True) ignorou Red Flag de notícias do Setor 2!", agent_id)
+        else:
+            db.update_agent_status(agent_id, "IDLE", f"Red flag de notícias ativo: {symbol} em espera.")
+            return {"agent_id": agent_id, "action": "HOLD", "reason": "red_flag"}
 
     # --- O FILTRO (SEMÁFORO DO SETOR 3) ---
     if not db.is_macro_ok(status):
         why = status.get("macro_reason") or "Sem autorização macro do Setor 3"
-        db.update_agent_status(agent_id, "IDLE", f"Veto macro do Setor 3: {why}")
-        log.warning("[SEMÁFORO SETOR 3 - VETO] Operador %s abortado para %s: %s", agent_id, symbol, why)
-        return {"agent_id": agent_id, "symbol": symbol, "action": "HOLD", "reason": "macro_veto"}
+        if force_execute:
+            log.warning("[GOLDEN TICKET / BYPASS] Agente %s (force_execute=True) ignorou Veto Macro do Setor 3 (%s)!", agent_id, why)
+        else:
+            db.update_agent_status(agent_id, "IDLE", f"Veto macro do Setor 3: {why}")
+            log.warning("[SEMÁFORO SETOR 3 - VETO] Operador %s abortado para %s: %s", agent_id, symbol, why)
+            return {"agent_id": agent_id, "symbol": symbol, "action": "HOLD", "reason": "macro_veto"}
 
     params = db.get_strategy_params(agent_id)
     sl_mult = float(params.get("sl_atr_multiplier", 1.5))
-    tp_mult = float(params.get("tp_atr_multiplier", 3.0))
-    tp_mult = max(tp_mult, sl_mult * 1.5)
 
     mode_label = " (Shadow Trading - DEMO)" if is_quarantined else ""
-    thought = f"Gatilho autônomo {trigger.get('trigger')} em {symbol}! Disparando ordem {action}{mode_label}..."
+    gt_label = " [GOLDEN TICKET / BYPASS]" if force_execute else ""
+    thought = f"Gatilho autônomo {trigger.get('trigger')} em {symbol}! Disparando ordem {action}{mode_label}{gt_label}..."
     db.update_agent_status(agent_id, "EXECUTING", thought)
 
     try:
@@ -208,14 +223,14 @@ def execute_autonomous_trigger(trigger: Dict[str, Any], db: DatabaseManager,
         atr_value = float(trigger.get("atr", 10.0))
         sign = 1 if action == "BUY" else -1
         sl = entry - sign * sl_mult * atr_value
-        tp = entry + sign * tp_mult * atr_value
+        tp = 0.0  # Take Profit Nulo: Fechamento dinâmico baseado em RSI
 
         sizing = bridge.calculate_lot(symbol, entry, sl, weight)
         if sizing["volume"] <= 0:
             db.update_agent_status(agent_id, "IDLE", "Lote calculado é zero (risco excede limites).")
             return {"agent_id": agent_id, "symbol": symbol, "action": "HOLD", "reason": "lot_too_small"}
 
-        order = bridge.execute_order(symbol, action, sizing["volume"], sl, tp,
+        order = bridge.execute_order(symbol, action, sizing["volume"], sl=sl, tp=0.0,
                                      comment=agent_id, agent_id=agent_id, db=db)
         if not order.get("success"):
             db.update_agent_status(agent_id, "IDLE", f"Ordem recusada pela corretora: {order.get('retcode')}")
@@ -224,10 +239,12 @@ def execute_autonomous_trigger(trigger: Dict[str, Any], db: DatabaseManager,
 
         ticket = order.get("ticket")
         exec_acc = order.get("execution_account", "DEMO" if is_quarantined else "REAL")
+        final_sl = float(order.get("sl") or sl)
+        final_tp = float(order.get("tp") or 0.0)
         db.log_trade(
             agent_id, symbol, action, sizing["volume"], order.get("price", entry),
-            sl, tp, sizing["risk_amount"], confidence=88,
-            rationale=f"Gatilho Puro Python {trigger.get('trigger')} (M{trigger.get('timeframe')}) [{exec_acc}]",
+            final_sl, final_tp, sizing["risk_amount"], confidence=88,
+            rationale=f"Gatilho Puro Python {trigger.get('trigger')} (M{trigger.get('timeframe')}) [{exec_acc}]{gt_label}",
             ticket=ticket, dry_run=bool(order.get("mock")), execution_account=exec_acc
         )
         badge = f"[{exec_acc}]"

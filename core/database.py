@@ -499,8 +499,13 @@ class DatabaseManager:
         return [self._normalize_trade(r) for r in self._select("trades_history", eq={"status": "OPEN"})]
 
     def close_trade(self, trade_id: Any, pnl: float, exit_price: float, outcome: str) -> None:
-        """`trade_id` é o ticket_mt5. `outcome` (TP/SL) é registrado no log e exit_reason."""
-        reason = "TP_HIT" if "TP" in outcome.upper() or pnl >= 0 else "SL_HIT"
+        """`trade_id` é o ticket_mt5. `outcome` (TP/SL/RSI) é registrado no log e exit_reason."""
+        if "RSI" in str(outcome).upper():
+            reason = str(outcome)
+        elif "TP" in str(outcome).upper() or pnl >= 0:
+            reason = "TP_HIT"
+        else:
+            reason = "SL_HIT"
         self._update("trades_history", {
             "status": "CLOSED", "profit_usd": pnl, "close_price": exit_price,
             "current_price": exit_price, "exit_reason": reason, "closed_at": _now(),
