@@ -199,6 +199,15 @@ def execute_autonomous_trigger(trigger: Dict[str, Any], db: DatabaseManager,
     if weight <= 0:
         weight = 1.0
 
+    # 1. IDENTIFICAÇÃO DO GOLDEN TICKET (Bypass Absoluto)
+    rsi_val = float(trigger.get("rsi") or 50.0)
+    is_golden_ticket = (
+        bool(trigger.get("force_execute"))
+        or (rsi_val <= 30.0 or rsi_val >= 70.0)
+        or (agent_id == "ops_beta" and (rsi_val <= 30.0 or rsi_val >= 70.0))
+        or trigger.get("golden_ticket", False)
+    )
+
     # 2. REBAIXAMENTO DO SETOR 2 (Fim do Veto): Notícias são apenas contexto/log informativo
     context = db.get_latest_market_context() or {}
     crypto_s = context.get("crypto_sentiment", 0)
@@ -209,14 +218,28 @@ def execute_autonomous_trigger(trigger: Dict[str, Any], db: DatabaseManager,
     if red_flag:
         market_context_str += " [RED FLAG INFORMATIVO - SEM VETO]"
 
-    log.info("[AUTONOMIA SETOR 1] Gatilho técnico detectado para %s em %s (%s). Contexto macro (log): %s",
-             agent_id, symbol, action, market_context_str)
+    if is_golden_ticket:
+        log.info("[GOLDEN TICKET - BYPASS TOTAL] Agente %s disparando ordem %s em %s (RSI %.1f) com prioridade matemática máxima! Ignorando qualquer veto ou vacina do Setor 3.",
+                 agent_id, action, symbol, rsi_val)
+    else:
+        log.info("[AUTONOMIA SETOR 1] Gatilho técnico detectado para %s em %s (%s). Contexto macro (log): %s",
+                 agent_id, symbol, action, market_context_str)
 
     params = db.get_strategy_params(agent_id)
     sl_mult = float(params.get("sl_atr_multiplier", 1.5))
 
+    # LIMITAÇÃO DO APRENDIZADO DO SETOR 3:
+    # O aprendizado serve para otimizar alvo e stop, não para proibir a entrada técnica.
+    vaccines = params.get("vaccines") or []
+    if vaccines and not is_golden_ticket:
+        # Calibra o multiplicador de ATR do stop para otimização estatística
+        sl_mult = max(0.8, round(sl_mult * 0.9, 2))
+        log.info("[SETOR 3 OTIMIZAÇÃO ML] Stop Loss ajustado pelo aprendizado de máquina para %s em %s (SL Mult: %.2f)",
+                 agent_id, symbol, sl_mult)
+
     mode_label = " (Shadow Trading - DEMO)" if is_quarantined else ""
-    thought = f"Gatilho autônomo {trigger.get('trigger')} em {symbol}! Disparando ordem {action}{mode_label} imediatamente..."
+    specialty_tag = f"[{trigger.get('specialty', agent_id)}]"
+    thought = f"{specialty_tag} Gatilho autônomo {trigger.get('trigger')} em {symbol}! Disparando ordem {action}{mode_label} imediatamente..."
     db.update_agent_status(agent_id, "EXECUTING", thought)
 
     try:
@@ -250,15 +273,15 @@ def execute_autonomous_trigger(trigger: Dict[str, Any], db: DatabaseManager,
         final_sl = float(order.get("sl") or sl)
         final_tp = float(order.get("tp") or 0.0)
 
-        # Registro na tabela trades_history com o motivo institucional de Liquidity Sweep (SMC)
-        vol_str = f"{trigger.get('vol_ratio', 1.3):.1f}x" if trigger.get('vol_ratio') else "1.3x"
-        smc_rationale = trigger.get("rationale") or f"False Breakout - Liquidity Sweep (Volume: {vol_str})"
+        # Registro na tabela trades_history com o rationale especializado do agente
+        trade_rationale = trigger.get("rationale") or f"Gatilho autônomo {trigger.get('trigger')}"
         db.log_trade(
             agent_id, symbol, action, sizing["volume"], order.get("price", entry),
             final_sl, final_tp, sizing["risk_amount"], confidence=95,
-            rationale=smc_rationale,
+            rationale=trade_rationale,
             ticket=ticket, dry_run=bool(order.get("mock")), execution_account=exec_acc,
-            market_context=market_context_str
+            market_context=market_context_str,
+            technical_rationale=trade_rationale
         )
         badge = f"[{exec_acc}]"
         if exec_acc == "DEMO" and is_quarantined:

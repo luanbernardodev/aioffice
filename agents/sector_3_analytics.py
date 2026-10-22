@@ -383,8 +383,12 @@ Você possui acesso direto e exclusivo em modo READ-ONLY ao servidor MCP nativo 
 Sua missão:
 1. Invoque as ferramentas MCP necessárias para investigar graficamente e matematicamente o horário da falha.
 2. Analise a ação de preço, nível de volume e cruzamento de médias móveis que culminaram no Stop Loss.
-3. Identifique o padrão tóxico e formule uma nova regra de evasão matemática (vacina) para imunizar os outros operadores.
-4. Ao concluir a investigação com base nas evidências extraídas via MCP, responda RIGOROSAMENTE com um JSON no seguinte formato:
+3. Identifique o padrão tóxico e formule uma nova regra de evasão matemática para calibrar stop/alvo e filtrar ruídos em meio de gráfico.
+4. LIMITAÇÃO CRÍTICA (FIM DO OVERFITTING):
+   - A regra de vacina atua EXCLUSIVAMENTE em entradas de MEIO DE GRÁFICO (30 < RSI < 70).
+   - NUNCA gere regras que impeçam ou vetem operações em extremos de RSI (RSI <= 30 ou RSI >= 70), pois estas possuem prioridade matemática máxima (Golden Ticket do Agente Beta).
+   - O objetivo da vacina é otimizar alvo e stop loss, e não proibir entradas técnicas perfeitas.
+5. Ao concluir a investigação com base nas evidências extraídas via MCP, responda RIGOROSAMENTE com um JSON no seguinte formato:
 {
   "toxic_pattern_identified": "Descrição concisa do padrão tóxico identificado via MT5 MCP",
   "new_avoidance_rule": {
@@ -392,7 +396,9 @@ Sua missão:
     "operator": "<",
     "value": 40.0,
     "condition": "avoid_buy",
-    "description": "RSI < 40 em exaustão de baixa"
+    "description": "Filtro de meio de gráfico: RSI < 40 em consolidação sem volume",
+    "mid_range_only": true,
+    "optimize_sl_tp": true
   }
 }
 Diretrizes do JSON:
@@ -412,7 +418,8 @@ def generate_post_mortem_vaccine(db: DatabaseManager, claude: ClaudeClient,
     2. Envia ao Claude o prompt investigativo direcionando-o a consultar o servidor MCP do MT5.
     3. O Claude faz chamadas autônomas (Tool Use) via MT5MCPClient em modo estritamente READ-ONLY.
     4. Com o contexto total extraído via MCP, o Claude devolve a vacina matemática final em JSON.
-    5. Injeta a vacina em strategy_parameters de todos os agentes ativos sobreviventes.
+    5. Injeta a vacina em strategy_parameters de todos os agentes ativos sobreviventes,
+       atuando restritamente como filtro de meio de gráfico e otimização de SL/TP.
     """
     log.warning("[Setor 3 Post-Mortem V2] Iniciando autópsia investigativa com MT5 MCP para o agente %s...", failed_agent_id)
     db.update_agent_status(AGENT_ID, "CRUNCHING", f"Autópsia Investigativa MT5 MCP: analisando falhas de {failed_agent_id}...")
@@ -427,7 +434,8 @@ def generate_post_mortem_vaccine(db: DatabaseManager, claude: ClaudeClient,
     investigative_prompt = (
         f"O agente {failed_agent_id} falhou ao operar {symbol} às {trade_time}. "
         f"Use a sua conexão MCP ao MT5 para extrair os candles M1/M5 desse horário, "
-        f"verificar o nível de volume e cruzar com as médias móveis."
+        f"verificar o nível de volume e cruzar com as médias móveis. "
+        f"Formule um filtro exclusivo de meio de gráfico para otimizar alvo e stop loss."
     )
 
     llm: Dict[str, Any] = {}
@@ -465,12 +473,15 @@ def generate_post_mortem_vaccine(db: DatabaseManager, claude: ClaudeClient,
             "operator": "<",
             "value": 40.0,
             "condition": "avoid_buy",
-            "description": "RSI < 40 em exaustão de baixa",
+            "description": "Filtro de meio de gráfico: RSI < 40 em exaustão de baixa",
         }
 
     rule["source_agent"] = failed_agent_id
+    rule["mid_range_only"] = True
+    rule["scope"] = "mid_range_filter"
+    rule["optimize_sl_tp"] = True
     if not rule.get("description"):
-        rule["description"] = f"{rule.get('indicator')} {rule.get('operator')} {rule.get('value')}"
+        rule["description"] = f"{rule.get('indicator')} {rule.get('operator')} {rule.get('value')} (Filtro Meio de Gráfico)"
 
     # Injeta a vacina nos agentes sobreviventes
     immunized_agents = db.append_vaccine_to_active_agents(rule, exclude_agent_id=failed_agent_id)
@@ -506,8 +517,12 @@ Sua missão investigativa de Machine Learning Contínuo:
    - Imbalances / Fair Value Gaps (FVG não preenchidos)
    - Absorção de volume contrária ao bias da operação
    - Níveis de Liquidação e sweep de liquidez (stop hunts)
-3. Formule uma nova regra técnica/filtros matemáticos (vacina) para imunizar e aprimorar a frota operacional inteira.
-4. Ao concluir, responda RIGOROSAMENTE com um JSON no seguinte formato:
+3. Formule uma nova regra técnica/filtros matemáticos para otimizar alvos e stops e filtrar entradas de meio de gráfico.
+4. LIMITAÇÃO CRÍTICA (FIM DO OVERFITTING):
+   - As vacinas atuam EXCLUSIVAMENTE em entradas normais de MEIO DE GRÁFICO (30 < RSI < 70).
+   - NUNCA crie regras que bloqueiem extremos de RSI (RSI <= 30 ou RSI >= 70 - Golden Ticket do Agente Beta).
+   - O aprendizado serve para otimizar alvo e stop, não para proibir entradas técnicas perfeitas.
+5. Ao concluir, responda RIGOROSAMENTE com um JSON no seguinte formato:
 {
   "technical_failure": "Descrição técnica institucional detalhada da falha (ex: Rejeição violenta em Order Block com FVG não preenchido e absorção de volume)",
   "vaccine_rule": {
@@ -515,7 +530,9 @@ Sua missão investigativa de Machine Learning Contínuo:
     "operator": "<",
     "value": 40.0,
     "condition": "avoid_buy",
-    "description": "Evitar compra em zona de absorção institucional / Order Block não mitigado"
+    "description": "Filtro de meio de gráfico: evitar compra em absorção institucional / Order Block não mitigado",
+    "mid_range_only": true,
+    "optimize_sl_tp": true
   }
 }
 Diretrizes do JSON:
@@ -538,7 +555,8 @@ def audit_cycle_failure_mcp(db: DatabaseManager,
     - Rastreio de ciclo atingiu 2 trades com saldo negativo.
     - Executa o prompt dinâmico institucional cripto via MCP (http://127.0.0.1:22346/mcp).
     - Salva na tabela public.agent_learning.
-    - Injeta a nova regra globalmente em TODOS os agentes operacionais ativos.
+    - Injeta a nova regra globalmente em TODOS os agentes operacionais ativos, atuando como
+      filtro de meio de gráfico e calibração de SL/TP (sem bloquear extremos Golden Ticket).
     """
     if claude is None:
         try:
@@ -555,7 +573,7 @@ def audit_cycle_failure_mcp(db: DatabaseManager,
         f"O Agente {agent_name} realizou 2 entradas consecutivas em {symbol} e obteve saldo negativo de {loss_str}. "
         f"Use as ferramentas MCP para ler os candles e o histórico. Identifique a falha técnica utilizando as "
         f"melhores métricas institucionais do mercado Cripto (ex: Order Blocks, Imbalances/FVG, absorção de volume "
-        f"ou níveis de Liquidação)."
+        f"ou níveis de Liquidação). Formule regra restrita a meio de gráfico para otimizar alvo e stop."
     )
 
     log.warning("[SETOR 3 - ML CONTÍNUO] %s", investigative_prompt)
@@ -603,8 +621,11 @@ def audit_cycle_failure_mcp(db: DatabaseManager,
 
     vaccine_rule["source_agent"] = agent_id
     vaccine_rule["symbol"] = symbol
+    vaccine_rule["mid_range_only"] = True
+    vaccine_rule["scope"] = "mid_range_filter"
+    vaccine_rule["optimize_sl_tp"] = True
     if not vaccine_rule.get("description"):
-        vaccine_rule["description"] = f"{vaccine_rule.get('indicator')} {vaccine_rule.get('operator')} {vaccine_rule.get('value')} ({symbol})"
+        vaccine_rule["description"] = f"{vaccine_rule.get('indicator')} {vaccine_rule.get('operator')} {vaccine_rule.get('value')} ({symbol} - Filtro Meio de Gráfico)"
 
     # 1. Salva na tabela public.agent_learning
     learning_record = {

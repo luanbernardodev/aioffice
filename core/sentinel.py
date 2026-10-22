@@ -123,13 +123,13 @@ class SignalResult(str):
 
 
 def analyze_market(df: pd.DataFrame, strategy: str = "ops_beta") -> SMCAnalysisResult:
-    """Análise quantitativa institucional para agentes operacionais (Setor 1):
-    Evolução do modelo de simples reversão de RSI para o Modelo Institucional de
-    Falso Rompimento (Liquidity Sweep SMC) avaliando Contexto, Direção e Força:
-    1. Contexto: Suporte e Resistência estabelecidos das últimas 50 barras ignorando os últimos 2 candles.
-    2. Direção: Spring (Sweep de Fundo para COMPRA) e Upthrust (Sweep de Topo para VENDA) via pavio vs corpo.
-    3. Força: Volume >= 1.3x da MA20 de volume, com Golden Ticket de Micro-Exaustão RSI (< 35 BUY, > 65 SELL).
-    - Retorna tupla estendida SMCAnalysisResult(bias, force_execute, details).
+    """Análise quantitativa institucional para agentes operacionais (Setor 1).
+    Compatível com SMCAnalysisResult(bias, force_execute, details):
+    1. Modelo Principal SMC: Falso Rompimento Institucional (Liquidity Sweep)
+       avaliando Contexto (BSL/SSL), Direção (Spring/Upthrust) e Força (Volume >= 1.3x).
+       Se RSI < 35 ou > 65, concede Golden Ticket (force_execute = True).
+    2. Golden Ticket de Reversão Extrema de RSI (<= 30 BUY, >= 70 SELL):
+       Prioridade matemática máxima com autonomia imediata (force_execute = True).
     """
     if df is None or len(df) == 0:
         return SMCAnalysisResult(None, False, {})
@@ -139,79 +139,236 @@ def analyze_market(df: pd.DataFrame, strategy: str = "ops_beta") -> SMCAnalysisR
     if bias_smc:
         return SMCAnalysisResult(bias_smc, force_smc, details_smc)
 
-    # 2. Fallback de Exaustão Extrema de RSI puro para continuidade operacional e robustez
+    # 2. GOLDEN TICKET ABSOLUTO: Extremos de RSI (Sobrevenda <= 30 / Sobrecompra >= 70)
     c = df.iloc[-1]
     rsi_val = float(c["rsi"]) if "rsi" in c and not pd.isna(c["rsi"]) else 50.0
     vol_ratio = float(c["vol_ratio"]) if "vol_ratio" in c and not pd.isna(c["vol_ratio"]) else 1.0
 
     if rsi_val <= 30.0:
-        rat = f"False Breakout - Liquidity Sweep (Volume: {vol_ratio:.1f}x) [RSI Extremo {rsi_val:.1f}]"
-        return SMCAnalysisResult("BUY", True, {"bias": "BUY", "rationale": rat, "vol_ratio": vol_ratio, "rsi": rsi_val, "force_execute": True})
+        rat = f"Sniper RSI Reversal (RSI: {rsi_val:.1f} <= 30 | Sobrevenda Extrema) [GOLDEN TICKET]"
+        details = {
+            "bias": "BUY",
+            "pattern": "SNIPER_RSI_OVERSOLD",
+            "rationale": rat,
+            "vol_ratio": vol_ratio,
+            "rsi": rsi_val,
+            "force_execute": True,
+            "golden_ticket": True,
+            "strategy": "ops_beta",
+        }
+        return SMCAnalysisResult("BUY", True, details)
+
     if rsi_val >= 70.0:
-        rat = f"False Breakout - Liquidity Sweep (Volume: {vol_ratio:.1f}x) [RSI Extremo {rsi_val:.1f}]"
-        return SMCAnalysisResult("SELL", True, {"bias": "SELL", "rationale": rat, "vol_ratio": vol_ratio, "rsi": rsi_val, "force_execute": True})
+        rat = f"Sniper RSI Reversal (RSI: {rsi_val:.1f} >= 70 | Sobrecompra Extrema) [GOLDEN TICKET]"
+        details = {
+            "bias": "SELL",
+            "pattern": "SNIPER_RSI_OVERBOUGHT",
+            "rationale": rat,
+            "vol_ratio": vol_ratio,
+            "rsi": rsi_val,
+            "force_execute": True,
+            "golden_ticket": True,
+            "strategy": "ops_beta",
+        }
+        return SMCAnalysisResult("SELL", True, details)
 
     return SMCAnalysisResult(None, False, {})
 
 
 def _check_alpha(df: pd.DataFrame) -> Optional[SignalResult]:
-    """Tendência + Pullback Institucional com Liquidity Sweep SMC."""
-    res = analyze_market(df, strategy="ops_alpha")
-    if res.bias:
-        return SignalResult(res.bias, force_execute=res.force_execute, details=res.details)
+    """Agente ALPHA (Trend Following - M15):
+    Opera a favor da tendência com pullback na EMA20 e confirmação de ADX >= 20."""
+    if df is None or len(df) < 50:
+        return None
+    c = df.iloc[-1]
+    price = float(c["close"])
+    open_p = float(c["open"])
+    ema20 = float(c["ema20"])
+    ema50 = float(c["ema50"])
+    adx_val = float(c["adx"]) if "adx" in c and not pd.isna(c["adx"]) else 25.0
+    vol_ratio = float(c["vol_ratio"]) if "vol_ratio" in c and not pd.isna(c["vol_ratio"]) else 1.0
+
+    if ema20 > ema50 and adx_val >= 20.0 and float(c["low"]) <= ema20 * 1.003 and price >= ema20 and price > open_p:
+        rat = f"Trend Following Pullback EMA20 (ADX: {adx_val:.1f} | Tendência de Alta | Vol: {vol_ratio:.1f}x)"
+        details = {"bias": "BUY", "pattern": "TREND_PULLBACK_BUY", "rationale": rat, "vol_ratio": vol_ratio, "strategy": "ops_alpha", "specialty": "Trend Following"}
+        return SignalResult("BUY", force_execute=False, details=details)
+
+    if ema20 < ema50 and adx_val >= 20.0 and float(c["high"]) >= ema20 * 0.997 and price <= ema20 and price < open_p:
+        rat = f"Trend Following Pullback EMA20 (ADX: {adx_val:.1f} | Tendência de Baixa | Vol: {vol_ratio:.1f}x)"
+        details = {"bias": "SELL", "pattern": "TREND_PULLBACK_SELL", "rationale": rat, "vol_ratio": vol_ratio, "strategy": "ops_alpha", "specialty": "Trend Following"}
+        return SignalResult("SELL", force_execute=False, details=details)
+
     return None
 
 
 def _check_beta(df: pd.DataFrame) -> Optional[SignalResult]:
-    """Reversão à Média + Exaustão Institucional por Liquidity Sweep SMC (Agente Beta):
-    - Spring de Fundo com Volume Spike / RSI < 35 -> BUY (force_execute = True)
-    - Upthrust de Topo com Volume Spike / RSI > 65 -> SELL (force_execute = True)
-    """
-    res = analyze_market(df, strategy="ops_beta")
-    if res.bias:
-        return SignalResult(res.bias, force_execute=res.force_execute, details=res.details)
+    """Agente BETA (Sniper RSI - M15):
+    Responsável exclusivo por operar as reversões extremas de RSI (30/70) no M15.
+    Possui autonomia total (Golden Ticket: force_execute = True) e bypass absoluto de qualquer regra de IA."""
+    if df is None or len(df) == 0:
+        return None
+    c = df.iloc[-1]
+    rsi_val = float(c["rsi"]) if "rsi" in c and not pd.isna(c["rsi"]) else 50.0
+    vol_ratio = float(c["vol_ratio"]) if "vol_ratio" in c and not pd.isna(c["vol_ratio"]) else 1.0
+
+    # Sobrevenda Extrema (RSI <= 30) -> COMPRA IMEDIATA (Golden Ticket)
+    if rsi_val <= 30.0:
+        rat = f"Sniper RSI Reversal (RSI {rsi_val:.1f} <= 30 | Sobrevenda Extrema) [GOLDEN TICKET]"
+        details = {
+            "bias": "BUY",
+            "pattern": "SNIPER_RSI_OVERSOLD",
+            "rationale": rat,
+            "rsi": rsi_val,
+            "vol_ratio": vol_ratio,
+            "force_execute": True,
+            "golden_ticket": True,
+            "strategy": "ops_beta",
+            "specialty": "Sniper RSI Reversal",
+        }
+        return SignalResult("BUY", force_execute=True, details=details)
+
+    # Sobrecompra Extrema (RSI >= 70) -> VENDA IMEDIATA (Golden Ticket)
+    if rsi_val >= 70.0:
+        rat = f"Sniper RSI Reversal (RSI {rsi_val:.1f} >= 70 | Sobrecompra Extrema) [GOLDEN TICKET]"
+        details = {
+            "bias": "SELL",
+            "pattern": "SNIPER_RSI_OVERBOUGHT",
+            "rationale": rat,
+            "rsi": rsi_val,
+            "vol_ratio": vol_ratio,
+            "force_execute": True,
+            "golden_ticket": True,
+            "strategy": "ops_beta",
+            "specialty": "Sniper RSI Reversal",
+        }
+        return SignalResult("SELL", force_execute=True, details=details)
+
     return None
 
 
 def _check_gamma(df: pd.DataFrame) -> Optional[SignalResult]:
-    """Rompimento / Breakout & Liquidity Sweep SMC."""
-    res = analyze_market(df, strategy="ops_gamma")
-    if res.bias:
-        return SignalResult(res.bias, force_execute=res.force_execute, details=res.details)
+    """Agente GAMMA (Volatility Breakout - M15):
+    Opera rompimento das Bandas de Bollinger com expansão de volume institucional."""
+    if df is None or len(df) < 30:
+        return None
+    c = df.iloc[-1]
+    price = float(c["close"])
+    bb_upper = float(c["bb_upper"])
+    bb_lower = float(c["bb_lower"])
+    vol_ratio = float(c["vol_ratio"]) if "vol_ratio" in c and not pd.isna(c["vol_ratio"]) else 1.0
+
+    if price > bb_upper and vol_ratio >= 1.2:
+        rat = f"Volatility Breakout Bandas Bollinger (Preço {price:.2f} > Upper {bb_upper:.2f} | Vol: {vol_ratio:.1f}x)"
+        details = {"bias": "BUY", "pattern": "VOLATILITY_BREAKOUT_BUY", "rationale": rat, "vol_ratio": vol_ratio, "strategy": "ops_gamma", "specialty": "Volatility Breakout"}
+        return SignalResult("BUY", force_execute=False, details=details)
+
+    if price < bb_lower and vol_ratio >= 1.2:
+        rat = f"Volatility Breakout Bandas Bollinger (Preço {price:.2f} < Lower {bb_lower:.2f} | Vol: {vol_ratio:.1f}x)"
+        details = {"bias": "SELL", "pattern": "VOLATILITY_BREAKOUT_SELL", "rationale": rat, "vol_ratio": vol_ratio, "strategy": "ops_gamma", "specialty": "Volatility Breakout"}
+        return SignalResult("SELL", force_execute=False, details=details)
+
     return None
 
 
 def check_delta_strategy(df: pd.DataFrame, symbol: str = "BTCUSD") -> Tuple[bool, Optional[str]]:
-    """Avaliação quantitativa autônoma do Agente Delta V2 (Liquidity Sweep SMC)."""
-    res = analyze_market(df, strategy="ops_delta")
-    if res.bias:
-        rat = res.details.get("rationale") or f"False Breakout - Liquidity Sweep (Volume: {float(df.iloc[-1].get('vol_ratio') or 1.3):.1f}x)"
-        return True, f"Gatilho Autônomo Delta ({rat})"
+    """Avaliação quantitativa autônoma do Agente Delta (SMC Liquidity Sweep)."""
+    res = _check_delta(df, symbol=symbol)
+    if res:
+        rat = res.details.get("rationale") or f"Gatilho Autônomo Delta ({res})"
+        return True, rat
     return False, None
 
 
 def _check_delta(df: pd.DataFrame, symbol: str = "BTCUSD") -> Optional[SignalResult]:
-    """SMC Scalper / Liquidation Sweep com modelo institucional de Falso Rompimento."""
-    res = analyze_market(df, strategy="ops_delta")
-    if res.bias:
-        return SignalResult(res.bias, force_execute=res.force_execute, details=res.details)
+    """Agente DELTA (SMC Scalper - M1/M5):
+    Focado em operar Liquidity Sweeps e Falsos Rompimentos rápidos em M1/M5,
+    utilizando mapeamento de contexto (SSL/BSL) e validações de volume institucional."""
+    if df is None or len(df) == 0:
+        return None
+    bias, force_execute, details = detect_liquidity_sweep(df, window=50, min_vol_ratio=1.3)
+    if bias:
+        details["strategy"] = "ops_delta"
+        details["specialty"] = "SMC Scalper (Liquidity Sweep & False Breakout)"
+        return SignalResult(bias, force_execute=force_execute, details=details)
     return None
 
 
 def _check_epsilon(df: pd.DataFrame) -> Optional[SignalResult]:
-    """Scalper VWAP + Momentum Institucional com Liquidity Sweep SMC."""
-    res = analyze_market(df, strategy="ops_epsilon")
-    if res.bias:
-        return SignalResult(res.bias, force_execute=res.force_execute, details=res.details)
+    """Agente EPSILON (VWAP/Momentum Scalper - M1/M5):
+    Scalper de fluxo institucional em M1/M5. Opera a favor da tendência quando o preço faz
+    pullback rápido na EMA ou VWAP com volume e momentum favoráveis."""
+    if df is None or len(df) < 25:
+        return None
+    c = df.iloc[-1]
+    price = float(c["close"])
+    open_p = float(c["open"])
+    vwap_val = float(c.get("vwap")) if c.get("vwap") is not None and not pd.isna(c.get("vwap")) else price
+    ema9 = float(c.get("ema9")) if c.get("ema9") is not None and not pd.isna(c.get("ema9")) else price
+    ema21 = float(c.get("ema21")) if c.get("ema21") is not None and not pd.isna(c.get("ema21")) else price
+    vol_ratio = float(c.get("vol_ratio")) if c.get("vol_ratio") is not None and not pd.isna(c.get("vol_ratio")) else 1.0
+    rsi_val = float(c.get("rsi")) if c.get("rsi") is not None and not pd.isna(c.get("rsi")) else 50.0
+
+    # Fluxo Comprador: Tendência de alta (Preço >= VWAP ou EMA9 >= EMA21)
+    # Pullback rápido: mínima testou a região de suporte dinâmico (VWAP ou EMA9/21) e fechou recuperando
+    bullish_trend = (ema9 >= ema21) or (price >= vwap_val)
+    tested_support = float(c["low"]) <= max(ema9, ema21, vwap_val) * 1.002
+    closed_bullish = (price > open_p) and (price >= min(ema9, vwap_val))
+
+    if bullish_trend and tested_support and closed_bullish and vol_ratio >= 1.0 and rsi_val < 68.0:
+        rat = f"VWAP Flow Momentum Scalp (Pullback VWAP/EMA | Vol: {vol_ratio:.1f}x | RSI: {rsi_val:.1f})"
+        details = {
+            "bias": "BUY",
+            "pattern": "VWAP_MOMENTUM_PULLBACK_BUY",
+            "rationale": rat,
+            "vol_ratio": vol_ratio,
+            "vwap": vwap_val,
+            "rsi": rsi_val,
+            "strategy": "ops_epsilon",
+            "specialty": "VWAP/Momentum Flow Scalper",
+            "force_execute": False,
+        }
+        return SignalResult("BUY", force_execute=False, details=details)
+
+    # Fluxo Vendedor: Tendência de baixa (Preço <= VWAP ou EMA9 <= EMA21)
+    # Pullback rápido: máxima testou a região de resistência dinâmica (VWAP ou EMA9/21) e fechou rejeitando
+    bearish_trend = (ema9 <= ema21) or (price <= vwap_val)
+    tested_resistance = float(c["high"]) >= min(ema9, ema21, vwap_val) * 0.998
+    closed_bearish = (price < open_p) and (price <= max(ema9, vwap_val))
+
+    if bearish_trend and tested_resistance and closed_bearish and vol_ratio >= 1.0 and rsi_val > 32.0:
+        rat = f"VWAP Flow Momentum Scalp (Pullback VWAP/EMA | Vol: {vol_ratio:.1f}x | RSI: {rsi_val:.1f})"
+        details = {
+            "bias": "SELL",
+            "pattern": "VWAP_MOMENTUM_PULLBACK_SELL",
+            "rationale": rat,
+            "vol_ratio": vol_ratio,
+            "vwap": vwap_val,
+            "rsi": rsi_val,
+            "strategy": "ops_epsilon",
+            "specialty": "VWAP/Momentum Flow Scalper",
+            "force_execute": False,
+        }
+        return SignalResult("SELL", force_execute=False, details=details)
+
     return None
 
 
-# Chaves = estratégia-base (clones herdam a estratégia via agents_status.strategy_type)
-CHECKS = {"ops_alpha": _check_alpha, "ops_beta": _check_beta, "ops_gamma": _check_gamma,
-          "ops_delta": _check_delta, "ops_epsilon": _check_epsilon}
-TRIGGER_NAMES = {"ops_alpha": "FALSE_BREAKOUT_SWEEP", "ops_beta": "FALSE_BREAKOUT_SWEEP",
-                 "ops_gamma": "FALSE_BREAKOUT_SWEEP", "ops_delta": "FALSE_BREAKOUT_SWEEP",
-                 "ops_epsilon": "FALSE_BREAKOUT_SWEEP"}
+# Chaves = estratégia-base vinculadas a cada especialidade
+CHECKS = {
+    "ops_alpha": _check_alpha,
+    "ops_beta": _check_beta,
+    "ops_gamma": _check_gamma,
+    "ops_delta": _check_delta,
+    "ops_epsilon": _check_epsilon,
+}
+
+TRIGGER_NAMES = {
+    "ops_alpha": "TREND_PULLBACK",
+    "ops_beta": "SNIPER_RSI_REVERSAL",
+    "ops_gamma": "VOLATILITY_BREAKOUT",
+    "ops_delta": "LIQUIDITY_SWEEP_SMC",
+    "ops_epsilon": "VWAP_MOMENTUM_PULLBACK",
+}
 
 
 def _num(row: pd.Series, key: str, digits: int = 5) -> Optional[float]:
@@ -221,15 +378,32 @@ def _num(row: pd.Series, key: str, digits: int = 5) -> Optional[float]:
 
 def check_vaccines(agent_id: str, bias: str, df: pd.DataFrame,
                    vaccines: List[Dict[str, Any]]) -> Optional[str]:
-    """Avalia se o gatilho matemático infringe alguma vacina pós-morte ativa.
-    Retorna o motivo do aborto se violar, ou None se estiver liberado para operar.
+    """Avalia se uma entrada em MEIO DE GRÁFICO (30 < RSI < 70) infringe algum filtro do Setor 3.
+    
+    LIMITAÇÕES ESTRITAS DO SETOR 3 (FIM DO OVERFITTING):
+    1. Golden Ticket (Bypass Absoluto): Se RSI <= 30 ou RSI >= 70, as vacinas são 100% IGNORADAS.
+    2. Agente Beta (Sniper RSI): Possui autonomia total e NUNCA é vetado por regras de IA.
+    3. As vacinas atuam unicamente como filtros de meio de gráfico para ruídos normais.
     """
-    if not vaccines:
+    if not vaccines or df is None or len(df) == 0:
         return None
 
     c = df.iloc[-1]
+    rsi_val = float(c.get("rsi") if c.get("rsi") is not None and not pd.isna(c.get("rsi")) else 50.0)
+
+    # 1. RESTAURAÇÃO DO "GOLDEN TICKET" (Bypass Absoluto):
+    # Se RSI <= 30 (Sobrevenda) ou RSI >= 70 (Sobrecompra): A ordem DEVE ser executada imediatamente.
+    if rsi_val <= 30.0 or rsi_val >= 70.0:
+        log.info("[GOLDEN TICKET - BYPASS TOTAL] RSI extremo (%.1f). Todas as vacinas e bloqueios de IA do Setor 3 são ignorados!", rsi_val)
+        return None
+
+    # Agente Beta tem autonomia total de reversão extrema
+    if agent_id == "ops_beta":
+        return None
+
+    # 2. FILTRO DE MEIO DE GRÁFICO:
     indicators = {
-        "RSI": float(c.get("rsi") if c.get("rsi") is not None and not pd.isna(c.get("rsi")) else 50.0),
+        "RSI": rsi_val,
         "ADX": float(c.get("adx") if c.get("adx") is not None and not pd.isna(c.get("adx")) else 0.0),
         "ATR": float(c.get("atr") if c.get("atr") is not None and not pd.isna(c.get("atr")) else 0.0),
         "VOL_RATIO": float(c.get("vol_ratio") if c.get("vol_ratio") is not None and not pd.isna(c.get("vol_ratio")) else 1.0),
@@ -274,9 +448,9 @@ def check_vaccines(agent_id: str, bias: str, df: pd.DataFrame,
             violated = True
 
         if violated:
-            source = str(vac.get("source_agent") or "Gamma").replace("ops_", "").title()
+            source = str(vac.get("source_agent") or "Setor3").replace("ops_", "").title()
             desc = vac.get("description") or f"{ind_name} {op} {threshold}"
-            return f"Vacina Pós-Morte do Agente {source} ({desc})"
+            return f"Filtro de Meio de Gráfico ({source}: {desc})"
 
     return None
 
@@ -372,52 +546,77 @@ class Sentinel:
 
             if bias:
                 label = agent_id.replace("ops_", "Ops ").title()
-
-                # Checa vacinas ativas (aprimoramento contínuo e vacinas institucionais do Setor 3)
-                vaccines = []
-                if agent_params and agent_id in agent_params:
-                    vaccines = agent_params[agent_id].get("vaccines") or []
-                elif self.db:
-                    try:
-                        p = self.db.get_strategy_params(agent_id)
-                        vaccines = p.get("vaccines") or []
-                    except Exception:
-                        pass
-
-                vaccine_veto = check_vaccines(agent_id, bias, df, vaccines)
-                if vaccine_veto:
-                    log.warning("[%s] GATILHO VETADO POR IMUNIZAÇÃO COLETIVA: %s no ativo %s (%s)",
-                                label, vaccine_veto, symbol, bias)
-                    continue
-
-                # 1. Autonomia Matemática Direta do Setor 1:
-                # Gatilho de Falso Rompimento / Liquidity Sweep validado
                 rsi_curr = float(df.iloc[-1].get("rsi", 50))
                 vol_curr = float(df.iloc[-1].get("vol_ratio", 1.0))
-                rat = details_dict.get("rationale") or f"False Breakout - Liquidity Sweep (Volume: {vol_curr:.1f}x)"
 
-                # 2. Registrar trava anti-spam para evitar múltiplos tiros no mesmo candle
+                # 1. RESTAURAÇÃO DO "GOLDEN TICKET" (Bypass Absoluto):
+                # Se RSI <= 30 (Sobrevenda) ou RSI >= 70 (Sobrecompra): A ordem DEVE ser executada imediatamente.
+                # O código ignora temporariamente QUALQUER "vacina", filtro de tendência ou bloqueio gerado pelo Setor 3.
+                is_golden_ticket = (
+                    (rsi_curr <= 30.0 or rsi_curr >= 70.0)
+                    or force_execute
+                    or details_dict.get("golden_ticket", False)
+                    or (strategy == "ops_beta" and (rsi_curr <= 30.0 or rsi_curr >= 70.0))
+                )
+
+                if is_golden_ticket:
+                    force_execute = True
+                    log.info("[%s] GOLDEN TICKET ATIVADO (RSI Extremo: %.1f)! Bypass Absoluto de qualquer vacina ou veto de IA.",
+                             label, rsi_curr)
+                else:
+                    # Checa vacinas ativas do Setor 3 unicamente para entradas normais de meio de gráfico (30 < RSI < 70)
+                    vaccines = []
+                    if agent_params and agent_id in agent_params:
+                        vaccines = agent_params[agent_id].get("vaccines") or []
+                    elif self.db:
+                        try:
+                            p = self.db.get_strategy_params(agent_id)
+                            vaccines = p.get("vaccines") or []
+                        except Exception:
+                            pass
+
+                    vaccine_veto = check_vaccines(agent_id, bias, df, vaccines)
+                    if vaccine_veto:
+                        log.warning("[%s] GATILHO VETADO EM MEIO DE GRÁFICO PELO SETOR 3: %s no ativo %s (%s)",
+                                    label, vaccine_veto, symbol, bias)
+                        continue
+
+                # 2. Definição do trigger nominal de acordo com a especialidade do agente
+                trigger_name = TRIGGER_NAMES.get(strategy, "QUANT_AUTONOMOUS_TRIGGER")
+                rat = details_dict.get("rationale") or f"Gatilho Autônomo ({trigger_name} | Vol: {vol_curr:.1f}x | RSI: {rsi_curr:.1f})"
+
+                # 3. Registrar trava anti-spam para evitar múltiplos tiros no mesmo candle
                 self.last_bar_time[(symbol, agent_id)] = candle_time
                 self._last_signal[(symbol, agent_id)] = candle_time
 
-                # 3. Log Limpo e Vitorioso
-                order_desc = "Compra (Spring / Sweep de Fundo)" if bias == "BUY" else "Venda (Upthrust / Sweep de Topo)"
-                log.info("[%s] GATILHO APROVADO: %s -> %s | Rationale: %s",
-                         label, order_desc, symbol, rat)
+                # 4. Log Limpo e Especializado do Agente
+                order_desc = "Compra" if bias == "BUY" else "Venda"
+                log.info("[%s] GATILHO APROVADO (%s): %s -> %s | Rationale: %s",
+                         label, trigger_name, order_desc, symbol, rat)
 
                 triggers.append(self._snapshot(symbol, agent_id, strategy,
-                                               TRIGGER_NAMES.get(strategy, "FALSE_BREAKOUT_SWEEP"),
+                                               trigger_name,
                                                bias, df, force_execute=force_execute,
                                                rationale=rat, details=details_dict))
         return triggers
 
     def _log_strategy_proximity(self, agent_id: str, strategy: str, symbol: str,
                                 df: pd.DataFrame, bias: Optional[str]) -> None:
-        """Imprime a telemetria quantitativa e distância para os gatilhos matemáticos."""
+        """Imprime a telemetria quantitativa e distância para os gatilhos matemáticos de cada mesa."""
         c = df.iloc[-1]
         price = float(c["close"])
 
-        if strategy == "ops_delta":
+        if strategy == "ops_beta":
+            rsi_val = float(c["rsi"])
+            if bias:
+                log.info("[Ops Beta] %s REVERSÃO SNIPER DETECTADA (RSI: %.1f) -> GOLDEN TICKET DISPARADO (%s)",
+                         symbol, rsi_val, bias)
+            else:
+                dist_extremo = min(abs(rsi_val - 30.0), abs(70.0 - rsi_val))
+                log.info("[Ops Beta] %s Sniper RSI Reversal (RSI: %.1f | Distância do Extremo: %.1f pts) -> Aguardando Extremo <=30 ou >=70",
+                         symbol, rsi_val, dist_extremo)
+
+        elif strategy == "ops_delta":
             swing = df.iloc[-23:-3]
             swing_low = float(swing["low"].min())
             swing_high = float(swing["high"].max())
@@ -425,36 +624,30 @@ class Sentinel:
             dist_high = ((swing_high - price) / price) * 100
             min_dist = min(abs(dist_low), abs(dist_high))
             if bias:
-                log.info("[Ops Delta] %s GATILHO DETECTADO! Bias=%s (Preço: %.2f) -> Disparando", symbol, bias, price)
+                log.info("[Ops Delta] %s SMC LIQUIDITY SWEEP DETECTADO! Bias=%s (Preço: %.2f) -> Disparando", symbol, bias, price)
             else:
-                if symbol in ["BTCUSD", "ETHUSD", "SOLUSD"]:
-                    deriv = derivatives_collector.get_crypto_derivatives(symbol)
-                    fr = deriv.get("funding_rate", 0.0)
-                    log.info("[Ops Delta] %s Cripto Derivativos (Funding: %.6f | Euforia: %s | RSI: %.1f) -> Abortado",
-                             symbol, fr, deriv.get("is_euphoric"), float(c.get("rsi") or 50.0))
-                else:
-                    log.info("[Ops Delta] %s SMC Clássico (Falta %.2f%% para o fundo/topo) -> Abortado", symbol, min_dist)
+                log.info("[Ops Delta] %s SMC Scalper (Falta %.2f%% para SSL/BSL | Vol Ratio: %.2fx) -> Aguardando Sweep",
+                         symbol, min_dist, float(c.get("vol_ratio") or 1.0))
+
+        elif strategy == "ops_epsilon":
+            vwap_val = float(c["vwap"]) if c["vwap"] is not None and not pd.isna(c["vwap"]) else price
+            dist_vwap = ((price - vwap_val) / price) * 100
+            vol_ratio = float(c["vol_ratio"]) if c["vol_ratio"] is not None and not pd.isna(c["vol_ratio"]) else 1.0
+            if bias:
+                log.info("[Ops Epsilon] %s VWAP MOMENTUM DETECTADO! Bias=%s -> Disparando Scalp de Fluxo", symbol, bias)
+            else:
+                log.info("[Ops Epsilon] %s VWAP Flow Scalper (Distância VWAP: %+.2f%% | Vol: %.2fx) -> Aguardando Pullback",
+                         symbol, dist_vwap, vol_ratio)
 
         elif strategy == "ops_alpha":
             ema20 = float(c["ema20"])
             dist_ema = ((price - ema20) / price) * 100
             adx_val = float(c["adx"])
             if bias:
-                log.info("[Ops Alpha] %s PULLBACK DETECTADO! Bias=%s -> Disparando", symbol, bias)
+                log.info("[Ops Alpha] %s TREND PULLBACK DETECTADO! Bias=%s -> Disparando", symbol, bias)
             else:
-                log.info("[Ops Alpha] %s monitorando Trend (Distância EMA20: %+.2f%% | ADX: %.1f) -> Abortado",
+                log.info("[Ops Alpha] %s Trend Following (Distância EMA20: %+.2f%% | ADX: %.1f) -> Aguardando Pullback",
                          symbol, dist_ema, adx_val)
-
-        elif strategy == "ops_beta":
-            rsi_val = float(c["rsi"])
-            bb_upper = float(c["bb_upper"])
-            bb_lower = float(c["bb_lower"])
-            if bias:
-                log.info("[Ops Beta] %s Monitorando Reversão + Exaustão (RSI: %.1f) -> GATILHO DISPARADO (%s)",
-                         symbol, rsi_val, bias)
-            else:
-                log.info("[Ops Beta] %s Monitorando Reversão + Exaustão (RSI: %.1f [Bandas: %.2f / %.2f]) -> Aguardando Gatilho",
-                         symbol, rsi_val, bb_lower, bb_upper)
 
         elif strategy == "ops_gamma":
             bw = float(c["bandwidth"])
@@ -462,18 +655,8 @@ class Sentinel:
             if bias:
                 log.info("[Ops Gamma] %s BREAKOUT DETECTADO! Bias=%s -> Disparando", symbol, bias)
             else:
-                log.info("[Ops Gamma] %s monitorando Breakout (Bandwidth: %.4f | ATR: %.2f) -> Abortado",
+                log.info("[Ops Gamma] %s Volatility Breakout (Bandwidth: %.4f | ATR: %.2f) -> Aguardando Rompimento",
                          symbol, bw, atr_val)
-
-        elif strategy == "ops_epsilon":
-            vwap_val = float(c["vwap"]) if c["vwap"] is not None and not pd.isna(c["vwap"]) else price
-            dist_vwap = ((price - vwap_val) / price) * 100
-            vol_ratio = float(c["vol_ratio"]) if c["vol_ratio"] is not None and not pd.isna(c["vol_ratio"]) else 1.0
-            if bias:
-                log.info("[Ops Epsilon] %s VWAP MOMENTUM DETECTADO! Bias=%s -> Disparando", symbol, bias)
-            else:
-                log.info("[Ops Epsilon] %s monitorando VWAP (Distância: %+.2f%% | Vol: %.2fx) -> Abortado",
-                         symbol, dist_vwap, vol_ratio)
 
     def scan_all(self, active_agents: Optional[Dict[str, str]] = None,
                  agent_params: Optional[Dict[str, dict]] = None,

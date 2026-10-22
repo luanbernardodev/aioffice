@@ -501,7 +501,9 @@ class DatabaseManager:
                   opened_at: Optional[str] = None, closed_at: Optional[str] = None,
                   current_price: Optional[float] = None, exit_reason: Optional[str] = None,
                   execution_account: str = "REAL",
-                  market_context: Optional[str] = None) -> dict:
+                  market_context: Optional[str] = None,
+                  technical_rationale: Optional[str] = None) -> dict:
+        rat_text = technical_rationale or rationale or ""
         row = {
             # ticket_mt5 é PK sem default: em simulação geramos um número único
             "ticket_mt5": int(ticket) if ticket else uuid.uuid4().int % 10**15,
@@ -510,7 +512,7 @@ class DatabaseManager:
             "sl": sl, "tp": tp, "status": status,
             "profit_usd": pnl if pnl is not None else 0.0,
             "exit_reason": exit_reason or ("OPEN" if status == "OPEN" else ("TP_HIT" if (pnl or 0) >= 0 else "SL_HIT")),
-            "technical_rationale": (rationale or "")[:500],
+            "technical_rationale": rat_text[:500],
             "risk_amount": risk_amount, "confidence": confidence, "dry_run": dry_run,
             "opened_at": opened_at or _now(), "closed_at": closed_at,
             "execution_account": execution_account,
