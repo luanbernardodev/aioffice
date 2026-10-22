@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Wallet, 
   TrendingUp, 
@@ -19,6 +19,7 @@ import {
   DollarSign
 } from 'lucide-react';
 import { MT5AccountStatus, Trade } from '@/types';
+import { supabase } from '@/lib/supabase';
 
 interface MT5AccountPanelProps {
   account: MT5AccountStatus | null;
@@ -49,6 +50,103 @@ export const MT5AccountPanel: React.FC<MT5AccountPanelProps> = ({
   const [activeTab, setActiveTab] = useState<'OPEN' | 'CLOSED'>('OPEN');
   const [symbolFilter, setSymbolFilter] = useState<string>('ALL');
 
+  // Estados reativos com listener em tempo real da telemetria MT5 (Saldo, Equity, Margem Livre)
+  const [balance, setBalance] = useState<number>(() => Number(account?.balance ?? 0.0));
+  const [equity, setEquity] = useState<number>(() => Number(account?.equity ?? account?.balance ?? 0.0));
+  const [freeMargin, setFreeMargin] = useState<number>(() => Number(account?.free_margin ?? (account as any)?.margin_free ?? account?.balance ?? 0.0));
+  const [floatingPnl, setFloatingPnl] = useState<number>(() => Number(account?.floating_pnl ?? 0.0));
+  const [isConnected, setIsConnected] = useState<boolean>(() => Boolean(account?.is_connected));
+
+  // Sincroniza se a prop account mudar
+  useEffect(() => {
+    if (account) {
+      if (account.balance !== undefined) setBalance(Number(account.balance));
+      if (account.equity !== undefined) setEquity(Number(account.equity));
+      const free = account.free_margin ?? (account as any).margin_free;
+      if (free !== undefined) setFreeMargin(Number(free));
+      if (account.floating_pnl !== undefined) setFloatingPnl(Number(account.floating_pnl));
+      if (account.is_connected !== undefined) setIsConnected(Boolean(account.is_connected));
+    }
+  }, [account]);
+
+  // Listener com supabase.channel('public:telemetry') para atualizar Saldo, Equity e Margem Livre
+  useEffect(() => {
+    const fetchTelemetry = async () => {
+      try {
+        const { data } = await supabase
+          .from('telemetry')
+          .select('*')
+          .eq('id', 1)
+          .limit(1);
+
+        if (data && data.length > 0) {
+          const row = data[0];
+          if (row.balance !== undefined) setBalance(Number(row.balance));
+          if (row.equity !== undefined) setEquity(Number(row.equity));
+          const free = row.margin_free ?? row.free_margin;
+          if (free !== undefined) setFreeMargin(Number(free));
+          if (row.floating_pnl !== undefined) setFloatingPnl(Number(row.floating_pnl));
+          if (row.is_connected !== undefined) setIsConnected(Boolean(row.is_connected));
+        }
+      } catch (err) {
+        console.error('Erro ao ler telemetria inicial:', err);
+      }
+    };
+
+    fetchTelemetry();
+
+    const channel = supabase
+      .channel('public:telemetry')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'telemetry' },
+        (payload: any) => {
+          if (payload.new) {
+            const row = payload.new;
+            if (row.balance !== undefined) setBalance(Number(row.balance));
+            if (row.equity !== undefined) setEquity(Number(row.equity));
+            const free = row.margin_free ?? row.free_margin;
+            if (free !== undefined) setFreeMargin(Number(free));
+            if (row.floating_pnl !== undefined) setFloatingPnl(Number(row.floating_pnl));
+            if (row.is_connected !== undefined) setIsConnected(Boolean(row.is_connected));
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'mt5_account_status' },
+        (payload: any) => {
+          if (payload.new) {
+            const row = payload.new;
+            if (row.balance !== undefined) setBalance(Number(row.balance));
+            if (row.equity !== undefined) setEquity(Number(row.equity));
+            const free = row.free_margin ?? row.margin_free;
+            if (free !== undefined) setFreeMargin(Number(free));
+            if (row.floating_pnl !== undefined) setFloatingPnl(Number(row.floating_pnl));
+            if (row.is_connected !== undefined) setIsConnected(Boolean(row.is_connected));
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'system_config' },
+        (payload: any) => {
+          if (payload.new) {
+            const row = payload.new;
+            if (row.balance !== undefined) setBalance(Number(row.balance));
+            if (row.equity !== undefined) setEquity(Number(row.equity));
+            const free = row.margin_free ?? row.free_margin;
+            if (free !== undefined) setFreeMargin(Number(free));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   // Garante array de trades seguro
   const safeTrades = useMemo(() => (Array.isArray(trades) ? trades : []), [trades]);
 
@@ -60,13 +158,6 @@ export const MT5AccountPanel: React.FC<MT5AccountPanelProps> = ({
   const closedTrades = useMemo(() => {
     return safeTrades.filter((t) => String(t.status || '').trim().toUpperCase() === 'CLOSED');
   }, [safeTrades]);
-
-  // Valores reais da conta com fallback para $0.00 se vazio (100% confiável no Supabase)
-  const balance = Number(account?.balance ?? 0.0);
-  const equity = Number(account?.equity ?? balance);
-  const floatingPnl = Number(account?.floating_pnl ?? 0.0);
-  const freeMargin = Number(account?.free_margin ?? balance);
-  const isConnected = Boolean(account?.is_connected);
 
   // Deriva métricas de TP / SL a partir do histórico de trades se a linha de status estiver com 0
   const { totalTpGain, totalSlLoss, winCount, lossCount, winRate, profitFactor } = useMemo(() => {

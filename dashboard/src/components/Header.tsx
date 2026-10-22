@@ -10,7 +10,15 @@ import {
   ShieldAlert,
   SlidersHorizontal,
 } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
 import { AssetSelector } from '@/components/AssetSelector';
+
+const ASSET_BUTTONS = [
+  { symbol: 'BTCUSD', label: 'BTC' },
+  { symbol: 'ETHUSD', label: 'ETH' },
+  { symbol: 'SOLUSD', label: 'SOL' },
+  { symbol: 'XAUUSD', label: 'XAUUSD' },
+];
 
 export interface HeaderProps {
   isRedFlag?: boolean;
@@ -49,6 +57,86 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const [showActions, setShowActions] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const [activeAssets, setActiveAssets] = useState<string[]>(['BTCUSD', 'ETHUSD', 'SOLUSD', 'XAUUSD']);
+
+  // Carrega active_assets de system_config (id=1) e escuta updates em tempo real
+  useEffect(() => {
+    const fetchActiveAssets = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('system_config')
+          .select('active_assets')
+          .eq('id', 1)
+          .limit(1);
+
+        if (!error && data && data.length > 0) {
+          const assets = data[0].active_assets;
+          if (Array.isArray(assets) && assets.length > 0) {
+            setActiveAssets(assets);
+          }
+        }
+      } catch (err) {
+        console.error('Erro ao ler active_assets do system_config:', err);
+      }
+    };
+
+    fetchActiveAssets();
+
+    const channel = supabase
+      .channel('header_system_config_realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'system_config' },
+        (payload: any) => {
+          if (payload.new && Array.isArray(payload.new.active_assets)) {
+            setActiveAssets(payload.new.active_assets);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // Função onClick dos botões (BTC, ETH, SOL, XAUUSD)
+  const handleAssetClick = async (symbol: string) => {
+    const isCurrentlyActive = activeAssets.some(
+      (a) => a.toUpperCase() === symbol.toUpperCase() || a.toUpperCase().startsWith(symbol.replace('USD', '').toUpperCase())
+    );
+
+    let novo_array: string[];
+    if (isCurrentlyActive) {
+      // Remove do array
+      novo_array = activeAssets.filter(
+        (a) => a.toUpperCase() !== symbol.toUpperCase() && !a.toUpperCase().startsWith(symbol.replace('USD', '').toUpperCase())
+      );
+    } else {
+      // Adiciona ao array
+      const fullSymbol = symbol.endsWith('USD') ? symbol : `${symbol}USD`;
+      novo_array = [...activeAssets, fullSymbol];
+    }
+
+    // Atualiza o estado visual do botão instantaneamente para refletir a escolha do usuário
+    setActiveAssets(novo_array);
+
+    try {
+      const { error } = await supabase
+        .from('system_config')
+        .update({ active_assets: novo_array })
+        .eq('id', 1);
+
+      if (error) {
+        console.error('Erro ao salvar active_assets no Supabase:', error);
+        // Rollback em caso de erro
+        setActiveAssets(activeAssets);
+      }
+    } catch (err) {
+      console.error('Falha de rede ao atualizar active_assets:', err);
+      setActiveAssets(activeAssets);
+    }
+  };
 
   // Fecha o dropdown se clicar fora
   useEffect(() => {
@@ -162,8 +250,43 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Separador sutil */}
         <span className="text-slate-600 hidden sm:inline">|</span>
 
-        {/* Painel de "ATIVOS" com os interruptores de BTC, ETH, SOL, XAUUSD */}
-        <AssetSelector className="bg-transparent border-0 shadow-none px-0 py-0" />
+        {/* Painel de "ATIVOS" com os botões de BTC, ETH, SOL, XAUUSD */}
+        <div className="flex items-center gap-1.5 flex-wrap justify-center font-mono">
+          <span className="text-[11px] font-bold text-slate-400 uppercase mr-1 hidden sm:inline">
+            Ativos:
+          </span>
+          {ASSET_BUTTONS.map(({ symbol, label }) => {
+            const isActive = activeAssets.some(
+              (a) =>
+                a.toUpperCase() === symbol.toUpperCase() ||
+                a.toUpperCase() === label.toUpperCase() ||
+                a.toUpperCase().startsWith(label.toUpperCase())
+            );
+            return (
+              <button
+                key={symbol}
+                type="button"
+                id={`btn-asset-${label.toLowerCase()}`}
+                onClick={() => handleAssetClick(symbol)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-bold transition-all duration-200 cursor-pointer ${
+                  isActive
+                    ? 'bg-cyan-950/70 border-cyan-500/60 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.35)]'
+                    : 'bg-slate-900/60 border-slate-800 text-slate-500 hover:border-slate-700 hover:text-slate-400'
+                }`}
+                title={`Alternar ${label} (${symbol}): ${isActive ? 'ATIVADO' : 'DESATIVADO'}`}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full transition-all duration-200 ${
+                    isActive
+                      ? 'bg-emerald-400 shadow-[0_0_6px_#10b981] animate-pulse'
+                      : 'bg-slate-600'
+                  }`}
+                />
+                <span>{label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* ========================================================= */}

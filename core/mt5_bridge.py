@@ -1,4 +1,5 @@
 """Ponte com o MetaTrader 5 com modo Mock (candles sintéticos) para qualquer SO."""
+import asyncio
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -1045,10 +1046,139 @@ class MT5Bridge:
         db.sync_mt5_account(account_data)
         return account_data
 
+    async def run_telemetry_loop(self, db: Any = None, interval_seconds: int = 20, stop_event: Optional[Any] = None) -> None:
+        """Executa o loop assíncrono de telemetria a cada 20 segundos."""
+        await telemetry_loop(self, db, interval_seconds, stop_event)
+
 
 def sync_account_and_positions(db: Any = None, bridge: Optional[MT5Bridge] = None) -> dict:
     """Função utilitária para sincronização global do MT5 com o Supabase."""
     if bridge is None:
         bridge = MT5Bridge()
     return bridge.sync_account_and_positions(db)
+
+
+async def telemetry_loop(bridge: Optional[Any] = None, db: Optional[Any] = None, interval_seconds: int = 20, stop_event: Optional[Any] = None) -> None:
+    """
+    Loop assíncrono de telemetria MT5 que roda a cada 20 segundos:
+    - Lê os dados atuais do MetaTrader 5 usando mt5.account_info().
+    - Extrai balance, equity, margin_free e envia um UPDATE para a tabela telemetry (ou system_config) no Supabase.
+    - Lê as posições abertas mt5.positions_get() e atualize o histórico no Supabase.
+    """
+    if db is None:
+        from core.database import DatabaseManager
+        db = DatabaseManager()
+    if bridge is None:
+        bridge = MT5Bridge()
+
+    log.info("[LOOP TELEMETRIA MT5] Iniciando telemetria assíncrona (intervalo: %ds)...", interval_seconds)
+
+    while True:
+        if stop_event is not None and stop_event.is_set():
+            log.info("[LOOP TELEMETRIA MT5] Stop event acionado. Encerrando loop.")
+            break
+        try:
+            # 1. Garante conexão com o MT5 se em ambiente live
+            if not getattr(bridge, "mock", True) and hasattr(bridge, "ensure_connection"):
+                bridge.ensure_connection()
+
+            # 2. Leitura dos dados atuais da conta MT5 via mt5.account_info()
+            info = None
+            if mt5 is not None:
+                try:
+                    info = mt5.account_info()
+                except Exception as mt5_err:
+                    log.warning("[LOOP TELEMETRIA MT5] Erro ao chamar mt5.account_info(): %s", mt5_err)
+
+            if info is not None:
+                balance = float(info.balance)
+                equity = float(info.equity)
+                margin_free = float(info.margin_free)
+                floating_pnl = float(equity - balance)
+                is_connected = True
+            else:
+                curr_acc = db.get_mt5_account() or {}
+                balance = float(curr_acc.get("balance", getattr(settings, "MOCK_BALANCE", 100.0) if getattr(settings, "DRY_RUN", True) else 100.0))
+                equity = float(curr_acc.get("equity", balance))
+                margin_free = float(curr_acc.get("free_margin", curr_acc.get("margin_free", balance)))
+                floating_pnl = float(equity - balance)
+                is_connected = False
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+
+            # 3. Enviar UPDATE para a tabela telemetry (ou system_config) no Supabase
+            if getattr(db, "client", None) is not None:
+                # UPDATE na tabela telemetry
+                try:
+                    db.client.table("telemetry").update({
+                        "balance": balance,
+                        "equity": equity,
+                        "margin_free": margin_free,
+                        "free_margin": margin_free,
+                        "floating_pnl": floating_pnl,
+                        "is_connected": is_connected,
+                        "updated_at": now_iso,
+                    }).eq("id", 1).execute()
+                except Exception as tel_err:
+                    log.error("[LOOP TELEMETRIA MT5] Erro ao enviar UPDATE para tabela telemetry: %s", tel_err)
+
+                # UPDATE na tabela system_config
+                try:
+                    db.client.table("system_config").update({
+                        "balance": balance,
+                        "equity": equity,
+                        "margin_free": margin_free,
+                        "updated_at": now_iso,
+                    }).eq("id", 1).execute()
+                except Exception as sys_err:
+                    log.error("[LOOP TELEMETRIA MT5] Erro ao enviar UPDATE para system_config: %s", sys_err)
+
+                # UPDATE na tabela mt5_account_status
+                try:
+                    db.client.table("mt5_account_status").update({
+                        "balance": balance,
+                        "equity": equity,
+                        "free_margin": margin_free,
+                        "floating_pnl": floating_pnl,
+                        "is_connected": is_connected,
+                        "updated_at": now_iso,
+                    }).eq("id", 1).execute()
+                except Exception as acc_err:
+                    log.error("[LOOP TELEMETRIA MT5] Erro ao enviar UPDATE para mt5_account_status: %s", acc_err)
+
+            log.info("[LOOP TELEMETRIA MT5] Telemetria atualizada: Saldo=$%.2f | Equity=$%.2f | Margem Livre=$%.2f | Conectado=%s",
+                     balance, equity, margin_free, is_connected)
+
+            # 4. Ler posições abertas mt5.positions_get() e atualizar histórico no Supabase
+            if mt5 is not None:
+                try:
+                    positions = mt5.positions_get()
+                    if positions:
+                        for pos in positions:
+                            pos_comment = str(getattr(pos, "comment", "") or "")
+                            exec_acc = "DEMO" if "[DEMO" in pos_comment else "REAL"
+                            order_type = "BUY" if pos.type == getattr(mt5, "ORDER_TYPE_BUY", 0) else "SELL"
+                            db.upsert_trade({
+                                "ticket_mt5": int(pos.ticket),
+                                "symbol": pos.symbol,
+                                "order_type": order_type,
+                                "volume": float(pos.volume),
+                                "entry_price": float(pos.price_open),
+                                "current_price": float(pos.price_current),
+                                "sl": float(pos.sl),
+                                "tp": float(pos.tp),
+                                "profit_usd": float(pos.profit),
+                                "status": "OPEN",
+                                "exit_reason": "OPEN",
+                                "dry_run": False,
+                                "execution_account": exec_acc,
+                            })
+                        log.info("[LOOP TELEMETRIA MT5] %d posição(ões) aberta(s) atualizadas no Supabase.", len(positions))
+                except Exception as pos_err:
+                    log.warning("[LOOP TELEMETRIA MT5] Erro ao consultar mt5.positions_get(): %s", pos_err)
+
+        except Exception as loop_err:
+            log.error("[LOOP TELEMETRIA MT5] Exceção no ciclo de telemetria: %s", loop_err)
+
+        await asyncio.sleep(interval_seconds)
 

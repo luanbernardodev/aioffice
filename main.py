@@ -17,6 +17,7 @@ Arquitetura de Autonomia Total em Dois Loops Independentes (Multithreading):
     placas de trânsito silenciosamente para guiar o Loop 1.
 """
 import argparse
+import asyncio
 import itertools
 import json
 import logging
@@ -34,7 +35,7 @@ from agents import (sector_1_ops, sector_2_news, sector_3_analytics, sector_4_rn
 from agents.claude_client import ClaudeClient
 from config import settings
 from core.database import DatabaseManager, strategy_of
-from core.mt5_bridge import MT5Bridge, managed_positions
+from core.mt5_bridge import MT5Bridge, managed_positions, telemetry_loop as bridge_telemetry_loop
 from core.news_collector import NewsCollector
 from core.sentinel import Sentinel
 
@@ -51,6 +52,10 @@ class QuantOffice:
         self.db.register_agents()
         self.bridge.sync_account_and_positions(self.db)
         self._stop_event = threading.Event()
+
+    async def telemetry_loop(self, interval: int = 20) -> None:
+        """Loop assíncrono de telemetria MT5 a cada 20 segundos."""
+        await bridge_telemetry_loop(self.bridge, self.db, interval_seconds=interval, stop_event=self._stop_event)
 
     def monitor_open_positions_and_close(self):
         """Loop de Gestão de Risco Ativa (Break-Even e Parcial) & Fecho Dinâmico por RSI:
@@ -304,7 +309,7 @@ class QuantOffice:
                  settings.DRY_RUN, self.bridge.mock, settings.SYMBOLS)
         log.info("=================================================================")
 
-        # Criação explícita das duas threads autônomas conforme especificação
+        # Criação explícita das threads autônomas conforme especificação
         engine_thread = threading.Thread(
             target=self.trading_engine_loop,
             daemon=True,
@@ -315,11 +320,17 @@ class QuantOffice:
             daemon=True,
             name="MacroRisk"
         )
+        telemetry_thread = threading.Thread(
+            target=lambda: asyncio.run(self.telemetry_loop(interval=20)),
+            daemon=True,
+            name="TelemetryLoop"
+        )
 
         engine_thread.start()
         macro_thread.start()
+        telemetry_thread.start()
 
-        log.info("Threads ativas: [TradingEngine (Loop 1)] e [MacroRisk (Loop 2)] rodando em paralelo.")
+        log.info("Threads ativas: [TradingEngine (Loop 1)], [MacroRisk (Loop 2)] e [TelemetryLoop (20s)] rodando em paralelo.")
 
         # Agenda a rotina diária no agendador central
         schedule.every().day.at(settings.DAILY_RUN_TIME).do(self.job_daily)
@@ -358,6 +369,20 @@ def monitor_open_positions_and_close(bridge: Optional[MT5Bridge] = None,
     if db is None:
         db = DatabaseManager()
     return bridge.monitor_open_positions_and_close(db)
+
+
+async def telemetry_loop(office: Optional[QuantOffice] = None, interval: int = 20) -> None:
+    """Função assíncrona do Loop de Telemetria MT5 que roda a cada 20 segundos:
+    - Lê os dados atuais do MetaTrader 5 usando mt5.account_info().
+    - Extrai balance, equity, margin_free e envia um UPDATE para a tabela telemetry (ou system_config) no Supabase.
+    - Lê as posições abertas mt5.positions_get() e atualiza o histórico no Supabase.
+    """
+    if office is None:
+        db = DatabaseManager()
+        bridge = MT5Bridge()
+        await bridge_telemetry_loop(bridge, db, interval_seconds=interval)
+    else:
+        await office.telemetry_loop(interval=interval)
 
 
 def run_autonomous_daemon(office: Optional[QuantOffice] = None) -> None:

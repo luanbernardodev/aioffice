@@ -63,6 +63,8 @@ class DatabaseManager:
             "agents_status": [], "strategy_parameters": [],
             "market_context": [], "trades_history": [],
             "mt5_account_status": [],
+            "telemetry": [],
+            "system_config": [],
         }
         if settings.SUPABASE_KEY and settings.SUPABASE_URL:
             try:
