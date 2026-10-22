@@ -1,6 +1,7 @@
 """Ponte com o MetaTrader 5 com modo Mock (candles sintéticos) para qualquer SO."""
 import asyncio
 import logging
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -12,14 +13,47 @@ from config import settings
 
 log = logging.getLogger("mt5")
 
-# Dicionário global de rastreamento de gestão de risco ativa (Break-Even e Realização Parcial)
-# Formato: {ticket: {'partial_taken': bool, 'breakeven_set': bool}}
+# Dicionário global de rastreamento de gestão de risco ativa (Break-Even, Trailing Stop no Lucro e Realização Parcial)
+# Formato: {ticket: {'partial_taken': bool, 'breakeven_set': bool, 'trailing_sl': float}}
 managed_positions: Dict[int, Dict[str, Any]] = {}
 
 try:  # MetaTrader5 só existe no Windows
     import MetaTrader5 as mt5  # type: ignore
 except Exception:  # noqa: BLE001
     mt5 = None
+
+# Trava reentrante global para serializar chamadas nativas ao MetaTrader 5
+_mt5_lock = threading.RLock()
+
+
+def _safe_mt5_call(func, *args, **kwargs):
+    """Executa chamadas ao MetaTrader5 protegidas por RLock e retentativas em WinError 10035.
+
+    O pacote MetaTrader5 em Python utiliza um socket IPC síncrono/não-bloqueante com o terminal64.exe.
+    Chamadas concorrentes a partir de múltiplas threads do Python provocam colisão de socket no Windows
+    (WSAEWOULDBLOCK / WinError 10035).
+    Este wrapper sincroniza o acesso de todas as threads através de um RLock e aplica exponential backoff.
+    """
+    if mt5 is None or func is None:
+        return None
+    with _mt5_lock:
+        max_attempts = 4
+        base_delay = 0.05
+        for attempt in range(max_attempts):
+            try:
+                return func(*args, **kwargs)
+            except OSError as exc:
+                is_10035 = getattr(exc, "winerror", None) == 10035 or "10035" in str(exc)
+                if is_10035 and attempt < max_attempts - 1:
+                    time.sleep(base_delay * (2 ** attempt))
+                    continue
+                raise
+            except Exception as exc:
+                is_10035 = "10035" in str(exc) or "non-blocking socket" in str(exc).lower()
+                if is_10035 and attempt < max_attempts - 1:
+                    time.sleep(base_delay * (2 ** attempt))
+                    continue
+                raise
 
 TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400}
 
@@ -91,12 +125,13 @@ def resolve_symbol(symbol: str) -> str:
     if mt5 is None:
         return symbol
     try:
-        if mt5.symbol_info(symbol) is not None:
-            return symbol
-        if symbol == "XAUUSD" and mt5.symbol_info("GOLD") is not None:
-            return "GOLD"
-        if symbol == "GOLD" and mt5.symbol_info("XAUUSD") is not None:
-            return "XAUUSD"
+        with _mt5_lock:
+            if _safe_mt5_call(mt5.symbol_info, symbol) is not None:
+                return symbol
+            if symbol == "XAUUSD" and _safe_mt5_call(mt5.symbol_info, "GOLD") is not None:
+                return "GOLD"
+            if symbol == "GOLD" and _safe_mt5_call(mt5.symbol_info, "XAUUSD") is not None:
+                return "XAUUSD"
     except Exception:
         pass
     return symbol
@@ -121,21 +156,22 @@ class MT5Bridge:
         if self.mock or mt5 is None or not login:
             return True
         try:
-            curr_acc = mt5.account_info()
-            if curr_acc and getattr(curr_acc, "login", None) == login:
-                return True
-            if mt5.login(login=login, password=password, server=server, timeout=timeout):
-                log.info("[MT5 CONTEXT SWITCH] Logado com sucesso na conta #%s (%s)", login, server)
-                return True
-            log.warning("[MT5 CONTEXT SWITCH] mt5.login falhou para #%s. Tentando mt5.initialize...", login)
-            if mt5.initialize(login=login, password=password, server=server, timeout=timeout):
-                self.mock = False
-                self.connected = True
-                log.info("[MT5 CONTEXT SWITCH] Reinicializado com sucesso na conta #%s (%s)", login, server)
-                return True
-            err = mt5.last_error()
-            log.error("[MT5 CONTEXT SWITCH] Falha ao alternar para conta #%s: %s", login, err)
-            return False
+            with _mt5_lock:
+                curr_acc = _safe_mt5_call(mt5.account_info)
+                if curr_acc and getattr(curr_acc, "login", None) == login:
+                    return True
+                if _safe_mt5_call(mt5.login, login=login, password=password, server=server, timeout=timeout):
+                    log.info("[MT5 CONTEXT SWITCH] Logado com sucesso na conta #%s (%s)", login, server)
+                    return True
+                log.warning("[MT5 CONTEXT SWITCH] mt5.login falhou para #%s. Tentando mt5.initialize...", login)
+                if _safe_mt5_call(mt5.initialize, login=login, password=password, server=server, timeout=timeout):
+                    self.mock = False
+                    self.connected = True
+                    log.info("[MT5 CONTEXT SWITCH] Reinicializado com sucesso na conta #%s (%s)", login, server)
+                    return True
+                err = _safe_mt5_call(mt5.last_error)
+                log.error("[MT5 CONTEXT SWITCH] Falha ao alternar para conta #%s: %s", login, err)
+                return False
         except Exception as exc:
             log.error("[MT5 CONTEXT SWITCH] Erro ao alternar conta MT5 para #%s: %s", login, exc)
             return False
@@ -153,57 +189,59 @@ class MT5Bridge:
             self.connected = False
             return False
 
-        try:
-            term = mt5.terminal_info()
-            if term is not None and getattr(term, "connected", False):
-                self.mock = False
-                self.connected = True
-                return True
-        except Exception:
-            pass
+        with _mt5_lock:
+            try:
+                term = _safe_mt5_call(mt5.terminal_info)
+                if term is not None and getattr(term, "connected", False):
+                    self.mock = False
+                    self.connected = True
+                    return True
+            except Exception:
+                pass
 
-        # Auto-reconnect automático à XM
-        log.warning("[AUTO-RECONNECT MT5] Terminal desconectado ou nulo. Reconectando à XM...")
-        kwargs: Dict[str, Any] = {}
-        target_login = self.demo_login or settings.MT5_LOGIN
-        target_pass = self.demo_password or settings.MT5_PASSWORD
-        target_serv = self.demo_server or settings.MT5_SERVER
-        if target_login:
-            kwargs = {
-                "login": target_login,
-                "password": target_pass,
-                "server": target_serv,
-                "timeout": 15000,
-            }
+            # Auto-reconnect automático à XM
+            log.warning("[AUTO-RECONNECT MT5] Terminal desconectado ou nulo. Reconectando à XM...")
+            kwargs: Dict[str, Any] = {}
+            target_login = self.demo_login or settings.MT5_LOGIN
+            target_pass = self.demo_password or settings.MT5_PASSWORD
+            target_serv = self.demo_server or settings.MT5_SERVER
+            if target_login:
+                kwargs = {
+                    "login": target_login,
+                    "password": target_pass,
+                    "server": target_serv,
+                    "timeout": 15000,
+                }
 
-        try:
-            mt5.shutdown()
-        except Exception:
-            pass
+            try:
+                _safe_mt5_call(mt5.shutdown)
+            except Exception:
+                pass
 
-        try:
-            if mt5.initialize(**kwargs):
-                self.mock = False
-                self.connected = True
-                acc = mt5.account_info()
-                log.info("[AUTO-RECONNECT MT5] Reconectado com sucesso à XM! Conta #%s | Servidor: %s",
-                         getattr(acc, "login", target_login), getattr(acc, "server", target_serv))
-                return True
-            else:
-                err = mt5.last_error()
-                log.warning("[AUTO-RECONNECT MT5] mt5.initialize falhou: %s", err)
+            try:
+                if _safe_mt5_call(mt5.initialize, **kwargs):
+                    self.mock = False
+                    self.connected = True
+                    acc = _safe_mt5_call(mt5.account_info)
+                    log.info("[AUTO-RECONNECT MT5] Reconectado com sucesso à XM! Conta #%s | Servidor: %s",
+                             getattr(acc, "login", target_login), getattr(acc, "server", target_serv))
+                    return True
+                else:
+                    err = _safe_mt5_call(mt5.last_error)
+                    log.warning("[AUTO-RECONNECT MT5] mt5.initialize falhou: %s", err)
+                    self.mock = True
+                    self.connected = False
+                    return False
+            except Exception as exc:
+                log.error("[AUTO-RECONNECT MT5] Erro durante reconexão: %s", exc)
                 self.mock = True
                 self.connected = False
                 return False
-        except Exception as exc:
-            log.error("[AUTO-RECONNECT MT5] Erro durante reconexão: %s", exc)
-            self.mock = True
-            self.connected = False
-            return False
 
     def shutdown(self) -> None:
         if self.connected and mt5 is not None:
-            mt5.shutdown()
+            with _mt5_lock:
+                _safe_mt5_call(mt5.shutdown)
             self.connected = False
 
     # ------------------------------------------------------------------ dados
@@ -213,11 +251,12 @@ class MT5Bridge:
         if self.mock:
             return self._mock_rates(symbol, timeframe, n)
         actual_symbol = resolve_symbol(symbol)
-        tf = getattr(mt5, f"TIMEFRAME_{timeframe}", mt5.TIMEFRAME_M15)
-        mt5.symbol_select(actual_symbol, True)
-        raw = mt5.copy_rates_from_pos(actual_symbol, tf, 0, n)
-        if raw is None or len(raw) == 0:
-            raise RuntimeError(f"Sem candles do MT5 para {symbol} ({actual_symbol}): {mt5.last_error()}")
+        with _mt5_lock:
+            tf = getattr(mt5, f"TIMEFRAME_{timeframe}", mt5.TIMEFRAME_M15)
+            _safe_mt5_call(mt5.symbol_select, actual_symbol, True)
+            raw = _safe_mt5_call(mt5.copy_rates_from_pos, actual_symbol, tf, 0, n)
+            if raw is None or len(raw) == 0:
+                raise RuntimeError(f"Sem candles do MT5 para {symbol} ({actual_symbol}): {_safe_mt5_call(mt5.last_error)}")
         df = pd.DataFrame(raw)
         df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
         df["volume"] = df["tick_volume"]
@@ -252,7 +291,8 @@ class MT5Bridge:
     def get_balance(self) -> float:
         if self.mock:
             return settings.MOCK_BALANCE
-        info = mt5.account_info()
+        with _mt5_lock:
+            info = _safe_mt5_call(mt5.account_info)
         return float(info.balance) if info else settings.MOCK_BALANCE
 
     # ------------------------------------------------------------------ lote
@@ -268,7 +308,8 @@ class MT5Bridge:
             loss_per_lot = sl_distance * contract
             vol_min, vol_max, vol_step = 0.01, 10.0, 0.01
         else:
-            info = mt5.symbol_info(symbol)
+            with _mt5_lock:
+                info = _safe_mt5_call(mt5.symbol_info, symbol)
             if info is None or info.trade_tick_size <= 0:
                 raise RuntimeError(f"symbol_info indisponível para {symbol}")
             loss_per_lot = (sl_distance / info.trade_tick_size) * info.trade_tick_value
@@ -326,8 +367,9 @@ class MT5Bridge:
         if self.mock:
             return float(self._mock_rates(symbol, settings.TIMEFRAME, 2)["close"].iloc[-1])
         actual_symbol = resolve_symbol(symbol)
-        mt5.symbol_select(actual_symbol, True)
-        tick = mt5.symbol_info_tick(actual_symbol)
+        with _mt5_lock:
+            _safe_mt5_call(mt5.symbol_select, actual_symbol, True)
+            tick = _safe_mt5_call(mt5.symbol_info_tick, actual_symbol)
         if tick is None:
             raise RuntimeError(f"Sem tick para {symbol} ({actual_symbol})")
         return float(tick.ask if side == "BUY" else tick.bid)
@@ -396,7 +438,8 @@ class MT5Bridge:
         # Determinação rigorosa de casas decimais (digits) do ativo
         digits = 2 if any(k in actual_symbol.upper() for k in ("JPY", "BTC", "ETH", "SOL", "XAU", "GOLD")) else 5
         if not self.mock and mt5 is not None:
-            sym_info = mt5.symbol_info(actual_symbol)
+            with _mt5_lock:
+                sym_info = _safe_mt5_call(mt5.symbol_info, actual_symbol)
             if sym_info:
                 digits = getattr(sym_info, "digits", digits)
 
@@ -450,40 +493,43 @@ class MT5Bridge:
         # 5. Context Switching Seguro: Conecta na conta Target antes de mt5.order_send()
         log.info("[ROTEAMENTO MT5] Executando ordem de %s em conta %s (#%s) | Preço: %.5f | SL: %.5f | Hard TP: %.5f",
                  aid, target_account, target_creds[0], price, sl, tp)
-        self.login_account(*target_creds)
 
-        order_type = mt5.ORDER_TYPE_BUY if action == "BUY" else mt5.ORDER_TYPE_SELL
         result = None
         retcode = None
         ret_msg = ""
         success = False
 
-        try:
-            for filling in (mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN):
-                request = {
-                    "action": mt5.TRADE_ACTION_DEAL,
-                    "symbol": actual_symbol,
-                    "volume": float(volume),
-                    "type": order_type,
-                    "price": price,
-                    "sl": float(sl),
-                    "tp": float(tp),  # Hard Take Profit físico registrado na corretora (R:R min 1:1.5)
-                    "deviation": deviation,
-                    "magic": magic,
-                    "comment": f"{comment[:23]} [{target_account[:4]}]",
-                    "type_time": mt5.ORDER_TIME_GTC,
-                    "type_filling": filling,
-                }
-                result = mt5.order_send(request)
-                if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
-                    log.info("Ordem MT5 executada com sucesso na conta %s: ticket=%s | preço=%.5f | sl=%.5f | tp=%.5f | magic=%d",
-                             target_account, result.order, result.price, sl, tp, magic)
-                    success = True
-                    break
-        finally:
-            # 6. Fallback Obrigatório: Reconecta imediatamente na conta principal
-            log.debug("[FALLBACK MT5] Retornando contexto para a conta principal (#%s)...", primary_creds[0])
-            self.login_account(*primary_creds)
+        with _mt5_lock:
+            self.login_account(*target_creds)
+            order_type = mt5.ORDER_TYPE_BUY if action == "BUY" else mt5.ORDER_TYPE_SELL
+
+            try:
+                for filling in (mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN):
+                    request = {
+                        "action": mt5.TRADE_ACTION_DEAL,
+                        "symbol": actual_symbol,
+                        "volume": float(volume),
+                        "type": order_type,
+                        "price": price,
+                        "sl": float(sl),
+                        "tp": float(tp),  # Hard Take Profit físico registrado na corretora (R:R min 1:1.5)
+                        "deviation": deviation,
+                        "magic": magic,
+                        "comment": f"{comment[:23]} [{target_account[:4]}]",
+                        "type_time": mt5.ORDER_TIME_GTC,
+                        "type_filling": filling,
+                    }
+                    result = _safe_mt5_call(mt5.order_send, request)
+                    if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+                        log.info("Ordem MT5 executada com sucesso na conta %s: ticket=%s | preço=%.5f | sl=%.5f | tp=%.5f | magic=%d",
+                                 target_account, result.order, result.price, sl, tp, magic)
+                        success = True
+                        break
+            finally:
+                # 6. Fallback Obrigatório: Reconecta imediatamente na conta principal
+                log.debug("[FALLBACK MT5] Retornando contexto para a conta principal (#%s)...", primary_creds[0])
+                if primary_creds[0] and primary_creds[0] != target_creds[0]:
+                    self.login_account(*primary_creds)
 
         if success and result is not None:
             return {
@@ -501,7 +547,7 @@ class MT5Bridge:
 
         retcode = getattr(result, "retcode", None)
         ret_msg = describe_retcode(retcode)
-        last_err = str(mt5.last_error())
+        last_err = str(_safe_mt5_call(mt5.last_error))
         log.error("Ordem MT5 rejeitada na conta %s: %s | retcode=%s | last_error=%s",
                   target_account, ret_msg, retcode, last_err)
         return {
@@ -523,37 +569,38 @@ class MT5Bridge:
             log.info("Posição %s fechada em modo simulação.", ticket)
             return {"success": True, "ticket": ticket, "mock": True, "comment": "POSIÇÃO FECHADA (SIMULADO)"}
 
-        positions = mt5.positions_get(ticket=ticket)
-        if not positions or len(positions) == 0:
-            log.warning("Posição MT5 #%s não encontrada para encerramento.", ticket)
-            return {"success": False, "comment": f"Posição #{ticket} não encontrada", "mock": False}
+        with _mt5_lock:
+            positions = _safe_mt5_call(mt5.positions_get, ticket=ticket)
+            if not positions or len(positions) == 0:
+                log.warning("Posição MT5 #%s não encontrada para encerramento.", ticket)
+                return {"success": False, "comment": f"Posição #{ticket} não encontrada", "mock": False}
 
-        pos = positions[0]
-        sym = symbol or pos.symbol
-        vol = float(volume or pos.volume)
-        close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
-        price = self.get_price(sym, "SELL" if pos.type == mt5.ORDER_TYPE_BUY else "BUY")
+            pos = positions[0]
+            sym = symbol or pos.symbol
+            vol = float(volume or pos.volume)
+            close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+            price = self.get_price(sym, "SELL" if pos.type == mt5.ORDER_TYPE_BUY else "BUY")
 
-        result = None
-        for filling in (mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN):
-            request = {
-                "action": mt5.TRADE_ACTION_DEAL,
-                "position": ticket,
-                "symbol": sym,
-                "volume": vol,
-                "type": close_type,
-                "price": price,
-                "deviation": deviation,
-                "magic": magic,
-                "comment": comment[:30],
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": filling,
-            }
-            result = mt5.order_send(request)
-            if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
-                log.info("Posição MT5 #%s encerrada com sucesso.", ticket)
-                return {"success": True, "ticket": result.order, "price": result.price,
-                        "mock": False, "comment": result.comment, "retcode": result.retcode}
+            result = None
+            for filling in (mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN):
+                request = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "position": ticket,
+                    "symbol": sym,
+                    "volume": vol,
+                    "type": close_type,
+                    "price": price,
+                    "deviation": deviation,
+                    "magic": magic,
+                    "comment": comment[:30],
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": filling,
+                }
+                result = _safe_mt5_call(mt5.order_send, request)
+                if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+                    log.info("Posição MT5 #%s encerrada com sucesso.", ticket)
+                    return {"success": True, "ticket": result.order, "price": result.price,
+                            "mock": False, "comment": result.comment, "retcode": result.retcode}
 
         retcode = getattr(result, "retcode", None)
         ret_msg = describe_retcode(retcode)
@@ -573,7 +620,8 @@ class MT5Bridge:
         vol_step = 0.01
 
         if not self.mock and mt5 is not None and self.connected:
-            info = mt5.symbol_info(resolve_symbol(symbol))
+            with _mt5_lock:
+                info = _safe_mt5_call(mt5.symbol_info, resolve_symbol(symbol))
             if info:
                 vol_min = getattr(info, "volume_min", 0.01) or 0.01
                 vol_step = getattr(info, "volume_step", 0.01) or 0.01
@@ -601,44 +649,49 @@ class MT5Bridge:
             log.info("[MOCK SLTP] Posição #%s modificada: SL=%.5f, TP=%.5f", ticket, sl, tp)
             return {"success": True, "ticket": ticket, "sl": sl, "tp": tp, "mock": True}
 
-        actual_symbol = resolve_symbol(symbol)
-        mt5.symbol_select(actual_symbol, True)
-        digits = 2 if "JPY" in actual_symbol or "BTC" in actual_symbol else 5
-        sym_info = mt5.symbol_info(actual_symbol)
-        if sym_info:
-            digits = getattr(sym_info, "digits", digits)
+        with _mt5_lock:
+            actual_symbol = resolve_symbol(symbol)
+            _safe_mt5_call(mt5.symbol_select, actual_symbol, True)
+            digits = 2 if "JPY" in actual_symbol or "BTC" in actual_symbol else 5
+            sym_info = _safe_mt5_call(mt5.symbol_info, actual_symbol)
+            if sym_info:
+                digits = getattr(sym_info, "digits", digits)
 
-        sl = round(float(sl), digits)
-        tp = round(float(tp), digits)
+            sl = round(float(sl), digits)
+            tp = round(float(tp), digits)
 
-        request = {
-            "action": mt5.TRADE_ACTION_SLTP,
-            "position": ticket,
-            "symbol": actual_symbol,
-            "sl": sl,
-            "tp": tp,
-        }
-        result = mt5.order_send(request)
-        if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
-            log.info("[BREAK-EVEN / SLTP] Posição #%s modificada com sucesso no MT5! Novo SL: %.5f | TP: %.5f",
-                     ticket, sl, tp)
-            return {"success": True, "ticket": ticket, "sl": sl, "tp": tp, "retcode": result.retcode, "mock": False}
+            request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "position": ticket,
+                "symbol": actual_symbol,
+                "sl": sl,
+                "tp": tp,
+            }
+            result = _safe_mt5_call(mt5.order_send, request)
+            if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+                log.info("[BREAK-EVEN / SLTP] Posição #%s modificada com sucesso no MT5! Novo SL: %.5f | TP: %.5f",
+                         ticket, sl, tp)
+                return {"success": True, "ticket": ticket, "sl": sl, "tp": tp, "retcode": result.retcode, "mock": False}
 
-        retcode = getattr(result, "retcode", None)
-        ret_msg = describe_retcode(retcode)
-        log.error("Falha ao modificar SL/TP da posição #%s: %s (retcode=%s)", ticket, ret_msg, retcode)
-        return {"success": False, "ticket": ticket, "retcode": retcode, "comment": ret_msg, "mock": False}
+            retcode = getattr(result, "retcode", None)
+            ret_msg = describe_retcode(retcode)
+            log.error("Falha ao modificar SL/TP da posição #%s: %s (retcode=%s)", ticket, ret_msg, retcode)
+            return {"success": False, "ticket": ticket, "retcode": retcode, "comment": ret_msg, "mock": False}
 
     def monitor_open_positions_and_close(self, db: Optional[Any] = None) -> List[Dict[str, Any]]:
-        """Loop de Gestão de Risco Ativa (Break-Even e Parcial) & Fecho Dinâmico por RSI:
-        1. Rastreamento em managed_positions: {'partial_taken': bool, 'breakeven_set': bool}.
-        2. Gatilho de Alvo 1 (1.5x ATR a favor da operação):
+        """Loop de Gestão de Risco Ativa (Break-Even e Stop no Lucro) & Fecho Dinâmico por RSI:
+        1. Rastreamento em managed_positions: {'partial_taken': bool, 'breakeven_set': bool, 'trailing_sl': float}.
+        2. Stop no Zero (Break-Even):
+           - Se gain >= be_distance (1.0x ATR ou 0.2% de ganho), move Stop Loss para o zero (entry_price + micro spread).
+        3. Realização Parcial (Alvo 1: 1.5x ATR a favor da operação):
            - Executa Realização Parcial (fecha 50% do lote a mercado).
-           - Move Stop Loss para o Break-Even (preço de entrada + micro spread).
-        3. Fecho Dinâmico Final por RSI:
+        4. Stop no Lucro (Trailing Stop):
+           - À medida que o trade avança no lucro, arrasta o Stop Loss no lucro (trail_distance = 1.2x ATR),
+             assegurando lucro garantido e travando ganhos progressivamente.
+        5. Fecho Dinâmico Final por RSI:
            - Posição COMPRA (BUY) fecha remanescente se RSI >= 60.
            - Posição VENDA (SELL) fecha remanescente se RSI <= 40.
-        4. Limpeza contínua do dicionário managed_positions para evitar vazamento de memória.
+        6. Limpeza contínua do dicionário managed_positions para evitar vazamento de memória.
         """
         if db is None:
             from core.database import DatabaseManager
@@ -650,7 +703,8 @@ class MT5Bridge:
         # Cenário 1: MT5 Conectado (Live Real ou Demo no Terminal)
         if not self.mock and mt5 is not None and self.connected:
             self.ensure_connection()
-            positions = mt5.positions_get()
+            with _mt5_lock:
+                positions = _safe_mt5_call(mt5.positions_get)
             active_tickets = set()
 
             if positions:
@@ -662,19 +716,50 @@ class MT5Bridge:
                     volume = float(pos.volume)
                     entry_price = float(pos.price_open)
                     current_price = float(pos.price_current)
+                    current_sl = float(getattr(pos, "sl", 0.0) or 0.0)
+                    curr_tp = float(getattr(pos, "tp", 0.0) or 0.0)
                     floating_pnl = float(pos.profit)
 
                     # 1. Dicionário de Controle de Posições (Memória de Gestão)
                     if ticket not in managed_positions:
-                        managed_positions[ticket] = {'partial_taken': False, 'breakeven_set': False}
+                        managed_positions[ticket] = {
+                            'partial_taken': False,
+                            'breakeven_set': False,
+                            'trailing_sl': current_sl,
+                        }
 
-                    # 2. Lógica de Break-Even e Parcial (Alvo 1: 1.5x ATR a favor)
+                    # Cálculo de métricas dinâmicas
                     gain = (current_price - entry_price) if pos_type == "BUY" else (entry_price - current_price)
                     atr_val = self.get_current_atr(symbol, "M15", 14)
-                    target_distance = max(1.5 * atr_val, entry_price * 0.003)
+                    with _mt5_lock:
+                        sym_info = _safe_mt5_call(mt5.symbol_info, resolve_symbol(symbol))
+                    pt = getattr(sym_info, "point", 0.01) or 0.01
+                    sp = getattr(sym_info, "spread", 10) or 10
+                    micro_spread = max(sp * pt, entry_price * 0.0002)
 
+                    # 2. A) STOP NO ZERO (BREAK-EVEN)
+                    # Quando o trade atinge margem segura (1.0x ATR ou 0.2%), move SL para entry + micro spread
+                    be_distance = max(1.0 * atr_val, entry_price * 0.002)
+                    be_sl = (entry_price + micro_spread) if pos_type == "BUY" else (entry_price - micro_spread)
+
+                    if gain >= be_distance and not managed_positions[ticket]['breakeven_set']:
+                        needs_be = (pos_type == "BUY" and (current_sl < be_sl or current_sl == 0.0)) or \
+                                   (pos_type == "SELL" and (current_sl > be_sl or current_sl == 0.0))
+                        if needs_be:
+                            be_res = self.modify_position_sltp(ticket=ticket, symbol=symbol, sl=be_sl, tp=curr_tp)
+                            if be_res.get("success"):
+                                managed_positions[ticket]['breakeven_set'] = True
+                                managed_positions[ticket]['trailing_sl'] = be_sl
+                                current_sl = be_sl
+                                db._update("trades_history", {"sl": be_sl}, {"ticket_mt5": ticket})
+                                log.info("[STOP NO ZERO / BREAK-EVEN] Posição MT5 #%s (%s %s) protegida! SL movido para %.5f (gain=+%.2f pts)",
+                                         ticket, pos_type, symbol, be_sl, gain)
+                        else:
+                            managed_positions[ticket]['breakeven_set'] = True
+
+                    # 2. B) REALIZAÇÃO PARCIAL (Alvo 1: 1.5x ATR a favor)
+                    target_distance = max(1.5 * atr_val, entry_price * 0.003)
                     if gain >= target_distance:
-                        # A) Executar Parcial (50% do volume)
                         if not managed_positions[ticket]['partial_taken']:
                             partial_vol = self.calculate_partial_volume(symbol, volume)
                             if 0 < partial_vol < volume:
@@ -688,21 +773,35 @@ class MT5Bridge:
                                     log.info("[REALIZAÇÃO PARCIAL EXECUTADA] Posição #%s: 50%% encerrada. Volume remanescente: %s",
                                              ticket, remaining_vol)
 
-                        # B) Acionar Break-Even
-                        if not managed_positions[ticket]['breakeven_set']:
-                            sym_info = mt5.symbol_info(resolve_symbol(symbol))
-                            pt = getattr(sym_info, "point", 0.01) or 0.01
-                            sp = getattr(sym_info, "spread", 10) or 10
-                            micro_spread = max(sp * pt, entry_price * 0.0002)
-                            be_sl = (entry_price + micro_spread) if pos_type == "BUY" else (entry_price - micro_spread)
-                            curr_tp = float(getattr(pos, "tp", 0.0) or 0.0)
+                    # 2. C) STOP NO LUCRO (TRAILING STOP NO LUCRO)
+                    # Conforme o preço avança, move o Stop Loss no lucro garantindo ganhos
+                    trailing_dist = max(1.2 * atr_val, entry_price * 0.0025)
+                    min_step = max(0.2 * atr_val, micro_spread * 2)
 
-                            be_res = self.modify_position_sltp(ticket=ticket, symbol=symbol, sl=be_sl, tp=curr_tp)
-                            if be_res.get("success"):
+                    if pos_type == "BUY":
+                        trail_sl = current_price - trailing_dist
+                        if trail_sl >= be_sl and trail_sl > (current_sl + min_step) and trail_sl < current_price:
+                            tr_res = self.modify_position_sltp(ticket=ticket, symbol=symbol, sl=trail_sl, tp=curr_tp)
+                            if tr_res.get("success"):
+                                current_sl = trail_sl
+                                managed_positions[ticket]['trailing_sl'] = trail_sl
                                 managed_positions[ticket]['breakeven_set'] = True
-                                db._update("trades_history", {"sl": be_sl}, {"ticket_mt5": ticket})
-                                log.info("[BREAK-EVEN ATIVADO] Posição #%s (%s %s) protegida! SL movido para %.5f",
-                                         ticket, pos_type, symbol, be_sl)
+                                db._update("trades_history", {"sl": trail_sl}, {"ticket_mt5": ticket})
+                                locked_profit = trail_sl - entry_price
+                                log.info("[STOP NO LUCRO / TRAILING STOP] Posição MT5 #%s (%s BUY): SL avançado no lucro para %.5f! (Lucro garantido: +%.2f pts | PnL: $%.2f)",
+                                         ticket, symbol, trail_sl, locked_profit, floating_pnl)
+                    else:  # SELL
+                        trail_sl = current_price + trailing_dist
+                        if trail_sl <= be_sl and (current_sl == 0.0 or trail_sl < (current_sl - min_step)) and trail_sl > current_price:
+                            tr_res = self.modify_position_sltp(ticket=ticket, symbol=symbol, sl=trail_sl, tp=curr_tp)
+                            if tr_res.get("success"):
+                                current_sl = trail_sl
+                                managed_positions[ticket]['trailing_sl'] = trail_sl
+                                managed_positions[ticket]['breakeven_set'] = True
+                                db._update("trades_history", {"sl": trail_sl}, {"ticket_mt5": ticket})
+                                locked_profit = entry_price - trail_sl
+                                log.info("[STOP NO LUCRO / TRAILING STOP] Posição MT5 #%s (%s SELL): SL avançado no lucro para %.5f! (Lucro garantido: +%.2f pts | PnL: $%.2f)",
+                                         ticket, symbol, trail_sl, locked_profit, floating_pnl)
 
                     # 3. Fecho Dinâmico Final por RSI (Alvo Final para o restante do lote)
                     curr_rsi = self.get_current_rsi(symbol)
@@ -778,20 +877,41 @@ class MT5Bridge:
                 pos_type = str(trade.get("action") or trade.get("order_type") or "BUY").upper()
                 volume = float(trade.get("volume", 0.01))
                 entry_price = float(trade.get("entry_price", 0.0))
+                current_sl = float(trade.get("sl", 0.0) or 0.0)
 
                 # 1. Dicionário de Controle de Posições (Memória de Gestão)
                 if ticket not in managed_positions:
-                    managed_positions[ticket] = {'partial_taken': False, 'breakeven_set': False}
+                    managed_positions[ticket] = {
+                        'partial_taken': False,
+                        'breakeven_set': False,
+                        'trailing_sl': current_sl,
+                    }
 
                 current_price = self.get_price(symbol, "SELL" if pos_type == "BUY" else "BUY")
-
-                # 2. Lógica de Break-Even e Parcial (Alvo 1: 1.5x ATR a favor)
                 gain = (current_price - entry_price) if pos_type == "BUY" else (entry_price - current_price)
                 atr_val = self.get_current_atr(symbol, "M15", 14)
-                target_distance = max(1.5 * atr_val, entry_price * 0.003)
+                micro_spread = max(entry_price * 0.0002, 0.5 if "BTC" in symbol else 0.01)
 
+                # 2. A) STOP NO ZERO (BREAK-EVEN MOCK)
+                be_distance = max(1.0 * atr_val, entry_price * 0.002)
+                be_sl = (entry_price + micro_spread) if pos_type == "BUY" else (entry_price - micro_spread)
+
+                if gain >= be_distance and not managed_positions[ticket]['breakeven_set']:
+                    needs_be = (pos_type == "BUY" and (current_sl < be_sl or current_sl == 0.0)) or \
+                               (pos_type == "SELL" and (current_sl > be_sl or current_sl == 0.0))
+                    if needs_be:
+                        managed_positions[ticket]['breakeven_set'] = True
+                        managed_positions[ticket]['trailing_sl'] = be_sl
+                        current_sl = be_sl
+                        db._update("trades_history", {"sl": be_sl}, {"ticket_mt5": ticket})
+                        log.info("[BREAK-EVEN MOCK ATIVADO] Trade #%s (%s %s) protegido! SL movido para %.5f",
+                                 ticket, pos_type, symbol, be_sl)
+                    else:
+                        managed_positions[ticket]['breakeven_set'] = True
+
+                # 2. B) REALIZAÇÃO PARCIAL MOCK (Alvo 1: 1.5x ATR a favor)
+                target_distance = max(1.5 * atr_val, entry_price * 0.003)
                 if gain >= target_distance:
-                    # A) Executar Parcial Mock (50% do volume)
                     if not managed_positions[ticket]['partial_taken']:
                         partial_vol = self.calculate_partial_volume(symbol, volume)
                         if 0 < partial_vol < volume:
@@ -803,14 +923,30 @@ class MT5Bridge:
                             log.info("[REALIZAÇÃO PARCIAL MOCK] Trade #%s: 50%% garantido! Lote remanescente: %s",
                                      ticket, remaining_vol)
 
-                    # B) Acionar Break-Even Mock
-                    if not managed_positions[ticket]['breakeven_set']:
-                        micro_spread = max(entry_price * 0.0002, 0.5 if "BTC" in symbol else 0.01)
-                        be_sl = (entry_price + micro_spread) if pos_type == "BUY" else (entry_price - micro_spread)
+                # 2. C) STOP NO LUCRO (TRAILING STOP MOCK)
+                trailing_dist = max(1.2 * atr_val, entry_price * 0.0025)
+                min_step = max(0.2 * atr_val, micro_spread * 2)
+
+                if pos_type == "BUY":
+                    trail_sl = current_price - trailing_dist
+                    if trail_sl >= be_sl and trail_sl > (current_sl + min_step) and trail_sl < current_price:
+                        current_sl = trail_sl
+                        managed_positions[ticket]['trailing_sl'] = trail_sl
                         managed_positions[ticket]['breakeven_set'] = True
-                        db._update("trades_history", {"sl": be_sl}, {"ticket_mt5": ticket})
-                        log.info("[BREAK-EVEN MOCK ATIVADO] Trade #%s (%s %s) protegido! SL movido para %.5f",
-                                 ticket, pos_type, symbol, be_sl)
+                        db._update("trades_history", {"sl": trail_sl}, {"ticket_mt5": ticket})
+                        locked_profit = trail_sl - entry_price
+                        log.info("[STOP NO LUCRO MOCK] Trade #%s (%s BUY): SL avançado no lucro para %.5f! (Lucro garantido: +%.2f pts)",
+                                 ticket, symbol, trail_sl, locked_profit)
+                else:  # SELL
+                    trail_sl = current_price + trailing_dist
+                    if trail_sl <= be_sl and (current_sl == 0.0 or trail_sl < (current_sl - min_step)) and trail_sl > current_price:
+                        current_sl = trail_sl
+                        managed_positions[ticket]['trailing_sl'] = trail_sl
+                        managed_positions[ticket]['breakeven_set'] = True
+                        db._update("trades_history", {"sl": trail_sl}, {"ticket_mt5": ticket})
+                        locked_profit = entry_price - trail_sl
+                        log.info("[STOP NO LUCRO MOCK] Trade #%s (%s SELL): SL avançado no lucro para %.5f! (Lucro garantido: +%.2f pts)",
+                                 ticket, symbol, trail_sl, locked_profit)
 
                 # 3. Fecho Dinâmico Final por RSI (Alvo Final para o restante do lote)
                 curr_rsi = self.get_current_rsi(symbol)
@@ -919,42 +1055,43 @@ class MT5Bridge:
             db.sync_mt5_account(account_data)
             return account_data
 
-        # --- MODO LIVE REAL MT5 ---
-        info = mt5.account_info()
-        if not info:
-            log.warning("Falha ao obter mt5.account_info()")
-            return {}
+        # --- MODO LIVE REAL MT5 (Protegido por Lock Thread-Safe) ---
+        with _mt5_lock:
+            info = _safe_mt5_call(mt5.account_info)
+            if not info:
+                log.warning("Falha ao obter mt5.account_info()")
+                return {}
 
-        balance = float(info.balance)
-        equity = float(info.equity)
-        free_margin = float(info.margin_free)
-        margin_level = float(info.margin_level) if info.margin > 0 else 0.0
+            balance = float(info.balance)
+            equity = float(info.equity)
+            free_margin = float(info.margin_free)
+            margin_level = float(info.margin_level) if info.margin > 0 else 0.0
 
-        positions = mt5.positions_get()
-        floating_pnl = 0.0
-        if positions:
-            for pos in positions:
-                floating_pnl += float(pos.profit)
-                pos_comment = str(pos.comment or "")
-                exec_acc = "DEMO" if "[DEMO" in pos_comment else mode
-                db.upsert_trade({
-                    "ticket_mt5": int(pos.ticket),
-                    "symbol": pos.symbol,
-                    "order_type": "BUY" if pos.type == mt5.ORDER_TYPE_BUY else "SELL",
-                    "volume": float(pos.volume),
-                    "entry_price": float(pos.price_open),
-                    "current_price": float(pos.price_current),
-                    "sl": float(pos.sl),
-                    "tp": float(pos.tp),
-                    "profit_usd": float(pos.profit),
-                    "status": "OPEN",
-                    "exit_reason": "OPEN",
-                    "dry_run": False,
-                    "execution_account": exec_acc,
-                })
+            positions = _safe_mt5_call(mt5.positions_get)
+            floating_pnl = 0.0
+            if positions:
+                for pos in positions:
+                    floating_pnl += float(pos.profit)
+                    pos_comment = str(pos.comment or "")
+                    exec_acc = "DEMO" if "[DEMO" in pos_comment else mode
+                    db.upsert_trade({
+                        "ticket_mt5": int(pos.ticket),
+                        "symbol": pos.symbol,
+                        "order_type": "BUY" if pos.type == mt5.ORDER_TYPE_BUY else "SELL",
+                        "volume": float(pos.volume),
+                        "entry_price": float(pos.price_open),
+                        "current_price": float(pos.price_current),
+                        "sl": float(pos.sl),
+                        "tp": float(pos.tp),
+                        "profit_usd": float(pos.profit),
+                        "status": "OPEN",
+                        "exit_reason": "OPEN",
+                        "dry_run": False,
+                        "execution_account": exec_acc,
+                    })
 
-        from_date = datetime.now() - timedelta(days=30)
-        deals = mt5.history_deals_get(from_date, datetime.now())
+            from_date = datetime.now() - timedelta(days=30)
+            deals = _safe_mt5_call(mt5.history_deals_get, from_date, datetime.now())
         total_tp_gain = 0.0
         total_sl_loss = 0.0
         win_count = 0
@@ -1086,7 +1223,8 @@ async def telemetry_loop(bridge: Optional[Any] = None, db: Optional[Any] = None,
             info = None
             if mt5 is not None:
                 try:
-                    info = mt5.account_info()
+                    with _mt5_lock:
+                        info = _safe_mt5_call(mt5.account_info)
                 except Exception as mt5_err:
                     log.warning("[LOOP TELEMETRIA MT5] Erro ao chamar mt5.account_info(): %s", mt5_err)
 
@@ -1152,7 +1290,8 @@ async def telemetry_loop(bridge: Optional[Any] = None, db: Optional[Any] = None,
             # 4. Ler posições abertas mt5.positions_get() e atualizar histórico no Supabase
             if mt5 is not None:
                 try:
-                    positions = mt5.positions_get()
+                    with _mt5_lock:
+                        positions = _safe_mt5_call(mt5.positions_get)
                     if positions:
                         for pos in positions:
                             pos_comment = str(getattr(pos, "comment", "") or "")

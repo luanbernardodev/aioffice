@@ -91,16 +91,19 @@ class QuantOffice:
             try:
                 # 1. Telemetria MT5 em tempo real (saldo, equity, posições abertas)
                 # Atualiza mt5_account_status.updated_at a cada ciclo para provar respiração do backend
-                self.bridge.sync_account_and_positions(self.db)
+                try:
+                    self.bridge.sync_account_and_positions(self.db)
+                except Exception as sync_err:
+                    log.warning("[LOOP 1] Falha transitória na sincronização MT5: %s", sync_err)
 
                 # 2. Relógio de Quarentena Automático: Desbloqueia agentes quando quarantine_until <= NOW()
                 released = self.check_quarantine_releases()
 
-                # 3. Fecho Dinâmico por RSI das Posições Abertas (BUY fecha se RSI >= 60, SELL fecha se RSI <= 40)
-                rsi_closed = self.monitor_open_positions_and_close()
-                if rsi_closed:
-                    log.info("[LOOP 1 - FECHO DINÂMICO RSI] %d posição(ões) encerrada(s) por RSI: %s",
-                             len(rsi_closed), rsi_closed)
+                # 3. Gestão Ativa de Risco (Stop no Zero / Trailing Stop no Lucro) e Fecho Dinâmico por RSI
+                closed_positions = self.monitor_open_positions_and_close()
+                if closed_positions:
+                    log.info("[LOOP 1 - GESTÃO ATIVA / FECHO RSI] %d posição(ões) encerrada(s): %s",
+                             len(closed_positions), closed_positions)
 
                 # 4. Liquidação e acompanhamento de ordens em andamento por SL
                 settled_count = sector_1_ops.settle_open_trades(self.db, self.bridge)

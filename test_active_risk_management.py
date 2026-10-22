@@ -134,6 +134,83 @@ class TestActiveRiskManagement(unittest.TestCase):
         self.assertNotIn(ticket_closed_by_sl, managed_positions)
         print("[OK] Teste 4: Limpeza contínua (Garbage Collection) de tickets inativos em managed_positions.")
 
+    def test_trailing_stop_in_profit_buy(self):
+        """Testa o avanço contínuo do Stop Loss no lucro (Trailing Stop) para COMPRA conforme o preço sobe."""
+        mock_db = MagicMock()
+        ticket = 999005
+        # Posição já teve parcial e break-even (SL em 60012)
+        managed_positions[ticket] = {"partial_taken": True, "breakeven_set": True, "trailing_sl": 60012.0}
+
+        trade_data = {
+            "id": ticket,
+            "ticket_mt5": ticket,
+            "symbol": "BTCUSD",
+            "action": "BUY",
+            "volume": 0.05,
+            "entry_price": 60000.0,
+            "sl": 60012.0,
+            "tp": 0.0,
+            "agent_id": "ops_alpha",
+        }
+        mock_db.get_open_trades.return_value = [trade_data]
+
+        # Preço sobe para 60,800 (+800 pts a favor)
+        # ATR = 100 -> trailing_dist = max(1.2 * 100, 60000 * 0.0025) = 150.0
+        # trail_sl = 60800 - 150 = 60650.0 (> 60012.0, travando +650 pts de lucro!)
+        self.bridge.get_price = MagicMock(return_value=60800.0)
+        self.bridge.get_current_atr = MagicMock(return_value=100.0)
+        self.bridge.get_current_rsi = MagicMock(return_value=50.0)  # RSI neutro
+
+        closed = self.bridge.monitor_open_positions_and_close(mock_db)
+        self.assertEqual(len(closed), 0)
+
+        calls = [c[0] for c in mock_db._update.call_args_list]
+        sl_updates = [c[1] for c in calls if "sl" in c[1]]
+        self.assertTrue(len(sl_updates) > 0)
+        final_sl = sl_updates[-1]["sl"]
+        self.assertGreater(final_sl, 60012.0)
+        self.assertGreater(final_sl, 60500.0)
+        self.assertGreater(final_sl, trade_data["entry_price"])
+        print(f"[OK] Teste 5: Trailing stop de COMPRA moveu SL no lucro para {final_sl} (Entrada: 60000, Preço atual: 60800).")
+
+    def test_trailing_stop_in_profit_sell(self):
+        """Testa o avanço contínuo do Stop Loss no lucro (Trailing Stop) para VENDA conforme o preço cai."""
+        mock_db = MagicMock()
+        ticket = 999006
+        # Posição VENDA aberta a 3000.0, break-even setado em 2999.0
+        managed_positions[ticket] = {"partial_taken": True, "breakeven_set": True, "trailing_sl": 2999.0}
+
+        trade_data = {
+            "id": ticket,
+            "ticket_mt5": ticket,
+            "symbol": "ETHUSD",
+            "action": "SELL",
+            "volume": 0.5,
+            "entry_price": 3000.0,
+            "sl": 2999.0,
+            "tp": 0.0,
+            "agent_id": "ops_beta",
+        }
+        mock_db.get_open_trades.return_value = [trade_data]
+
+        # Preço cai para 2900.0 (+100 pts a favor da VENDA)
+        # ATR = 10 -> trailing_dist = max(1.2 * 10, 3000 * 0.0025) = 12.0
+        # trail_sl = 2900 + 12 = 2912.0 (< 2999.0, travando lucro na ponta vendedora!)
+        self.bridge.get_price = MagicMock(return_value=2900.0)
+        self.bridge.get_current_atr = MagicMock(return_value=10.0)
+        self.bridge.get_current_rsi = MagicMock(return_value=50.0)  # RSI neutro
+
+        closed = self.bridge.monitor_open_positions_and_close(mock_db)
+        self.assertEqual(len(closed), 0)
+
+        calls = [c[0] for c in mock_db._update.call_args_list]
+        sl_updates = [c[1] for c in calls if "sl" in c[1]]
+        self.assertTrue(len(sl_updates) > 0)
+        final_sl = sl_updates[-1]["sl"]
+        self.assertLess(final_sl, 2999.0)
+        self.assertLess(final_sl, trade_data["entry_price"])
+        print(f"[OK] Teste 6: Trailing stop de VENDA moveu SL no lucro para {final_sl} (Entrada: 3000, Preço atual: 2900).")
+
 
 if __name__ == "__main__":
     unittest.main()
