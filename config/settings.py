@@ -26,7 +26,7 @@ ANTHROPIC_WORKSPACE_ID = os.getenv("ANTHROPIC_WORKSPACE_ID", "")
 
 # --- Servidor MCP MetaTrader 5 (Setor 3 Auditoria - Exclusivo Read-Only) ---
 MT5_MCP_ADDRESS = os.getenv("MT5_MCP_ADDRESS", "http://127.0.0.1:22346/mcp")
-MT5_MCP_API_KEY = os.getenv("MT5_MCP_API_KEY", "t8q5x0V6N7XrY/9/kGVb/kaOPWH4fV/ui+beHGxfjM")
+MT5_MCP_API_KEY = os.getenv("MT5_MCP_API_KEY", "")  # nunca hardcode: defina no .env
 
 # --- MetaTrader 5 (DEMO & REAL) ---
 MT5_LOGIN_DEMO = _int("MT5_LOGIN_DEMO", _int("MT5_LOGIN", 309673774))

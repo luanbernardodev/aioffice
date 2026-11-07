@@ -5,3 +5,6 @@ __pycache__/
 .system_generated/
 *.log
 .DS_Store
+data/
+logs/
+state/

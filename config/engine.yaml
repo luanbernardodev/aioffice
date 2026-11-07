@@ -1,0 +1,91 @@
+# Motor determinístico (engine/) — todos os parâmetros de preço em múltiplos de ATR.
+# Nada aqui é segredo: credenciais ficam só no .env.
+
+account:
+  demo_login: 309673774          # única conta autorizada a receber ordens
+  allow_real: false              # trava: o código recusa conta REAL enquanto for false (e exige confirmação extra)
+  magic: 20261107
+  dry_run: true                  # true = dados reais do MT5, ordens simuladas (paper). false = ordens reais na DEMO
+  server_time: ny_plus_7         # XM: horário do servidor = New York + 7h (UTC+2 inverno / UTC+3 verão)
+
+risk:
+  max_positions_total: 6         # conta posições abertas + ordens pendentes
+  max_positions_per_symbol: 3
+  daily_stop_usd: 30.0           # perda realizada no dia (UTC) -> pausa até o dia seguinte
+  max_consecutive_losses: 4
+  streak_pause_minutes: 120
+  min_sl_atr: 1.0                # SL mínimo = 1 x ATR(M5)
+  max_sl_atr: 6.0                # SL acima disso -> setup descartado (risco grande demais p/ scalp)
+  tp1_r: 1.5
+  trailing:
+    activate_r: 1.0              # ativa em +1R ...
+    activate_spread_mult: 3.0    # ... ou spread x 3, o que for maior
+    atr_mult: 1.0                # trailing de 1 x ATR(M5), só a favor
+
+regime:
+  h1_ma: 100
+  h1_slope_bars: 5               # inclinação = SMA100[t] - SMA100[t-5] (em ATR H1)
+  h1_min_slope_atr: 0.0
+  m15_swing_k: 3                 # fractal: pivô confirmado k barras depois
+  news_window_minutes: 30
+  news_keywords: ["CPI", "FOMC", "Federal Funds Rate", "Non-Farm", "PCE"]
+
+symbols:
+  GOLD:
+    enabled: true
+    lot: 0.01
+    max_spread_atr: 0.15
+    sessions:                    # janelas locais; vale se estiver em QUALQUER uma
+      - {tz: Europe/London, start: "07:00", end: "16:30"}
+      - {tz: America/New_York, start: "08:00", end: "17:00"}
+    agents: [A2_PULLBACK, A3_BOS_RETEST]
+  US500Cash:
+    enabled: true
+    lot: 0.1                     # volume_min da XM = 0.1 (0.01 é rejeitado)
+    max_spread_atr: 0.30
+    sessions:
+      - {tz: America/New_York, start: "09:30", end: "16:00"}
+    agents: [A2_PULLBACK, A3_BOS_RETEST]
+  BTCUSD:
+    enabled: true
+    lot: 0.01
+    max_spread_atr: 0.50         # spread mediano XM ~0.42 x ATR(M5)
+    sessions: []                 # 24/7
+    agents: [A4_RSI_REVERSAL]    # A2/A3 desligados no BTC por custo de spread (ver backtest)
+
+agents:
+  A2_PULLBACK:
+    swing_k: 3
+    impulse_min_atr: 2.0         # impulso mínimo (H-L) em ATR(M5)
+    fib_levels: [0.5, 0.559, 0.618]
+    max_entries_per_impulse: 3
+    ma_period: 100
+    ma_touch_atr: 0.15
+    sl_buffer_atr: 0.2           # SL além da origem do impulso
+    tp_extension: 1.272
+    limit_expiry_bars: 24
+  A3_BOS_RETEST:
+    swing_k: 3
+    max_bars_after_bos: 24       # setup expira
+    retest_offset_atr: 0.05      # LIMIT um pouco acima/abaixo do nível rompido
+    sl_beyond_level_atr: 1.0
+    tp_extension: 1.272
+    min_break_leg_atr: 1.5
+  A4_RSI_REVERSAL:
+    timeframe: M15
+    rsi_period: 14
+    oversold: 25
+    overbought: 75
+    zone_lookback_bars: 3        # gatilho de PA vale até 3 barras após o RSI tocar a zona
+    trend_filter: true           # true: compra só acima da MA100 H1 / venda só abaixo
+    sl_lookback_bars: 5
+    sl_buffer_atr: 0.2
+    tp_r: 2.0
+
+backtest:
+  spread_mult: 1.5               # spread das barras do MT5 é o MÍNIMO da barra -> inflaciona
+  bars: 99999                    # máximo do terminal (~17 meses M5 GOLD/US500, ~12 BTC)
+
+logging:
+  trades_csv: logs/trades.csv
+  supabase_sink: false           # true = espelha trades no Supabase em thread de fundo (fora do loop)

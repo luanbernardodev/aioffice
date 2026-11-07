@@ -1,6 +1,7 @@
 """Ponte com o MetaTrader 5 com modo Mock (candles sintéticos) para qualquer SO."""
 import asyncio
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -407,6 +408,9 @@ class MT5Bridge:
         # 2. Ler trading_mode de system_config
         sys_cfg = db.get_system_config()
         trading_mode = str(sys_cfg.get("trading_mode", "DEMO")).upper()
+        if trading_mode == "REAL" and os.getenv("QUANT_ALLOW_REAL") != "I_AUTHORIZE":
+            log.error("[TRAVA] trading_mode=REAL vindo do Supabase ignorado: conta REAL bloqueada. Usando DEMO.")
+            trading_mode = "DEMO"
 
         # 3. Verificar status e perdas do operador
         agent_stat = db.get_agent_status(aid) or {}
@@ -1025,6 +1029,8 @@ class MT5Bridge:
 
         sys_cfg = db.get_system_config()
         mode = str(sys_cfg.get("trading_mode", "DEMO")).upper()
+        if mode == "REAL" and os.getenv("QUANT_ALLOW_REAL") != "I_AUTHORIZE":
+            mode = "DEMO"  # [TRAVA] conta REAL bloqueada sem autorização explícita
         if mode == "REAL":
             target_login = self.real_login
             target_password = self.real_password

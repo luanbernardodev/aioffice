@@ -8,3 +8,5 @@ feedparser
 requests
 schedule
 tzdata
+pyyaml
+pytest

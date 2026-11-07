@@ -46,3 +46,17 @@ Sistema multi-agente quantitativo autônomo com visualização 2D/3D (Next.js/Th
    ```
 4. **Setor 1 (Operadores):**
    Só executam ordens no MetaTrader 5 caso possuam autorização macro ativa e vigente emitida pelo Setor 3.
+
+## ⚙️ Motor determinístico (engine/) — substitui o Loop 1 legado
+
+Sem LLM no caminho de execução. A1 regime/veto → A2 pullback / A3 BOS-retest / A4 RSI BTC → A5 risco → MT5.
+Parâmetros em `config/engine.yaml` (por ativo, em múltiplos de ATR).
+
+```bash
+python -m pytest                                  # testes do motor (tests/)
+python -m backtest.run_backtest --fetch           # baixa histórico do MT5 (read-only) e roda o comparativo
+python run_engine.py                              # DRY_RUN: dados reais da DEMO, ordens simuladas
+python run_engine.py --live-demo                  # ordens reais na DEMO 309673774 (trava recusa outra conta/REAL)
+```
+Trades: `logs/trades.csv` (demo) / `logs/trades_paper.csv` (dry-run). Relatórios: `reports/`.
+Eventos de notícia históricos para o backtest (opcional): `config/news_events.csv` com colunas `datetime_utc,title`.
