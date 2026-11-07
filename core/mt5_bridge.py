@@ -27,6 +27,11 @@ except Exception:  # noqa: BLE001
 _mt5_lock = threading.RLock()
 
 
+# Magic do sistema legado (Setores 1-6). Cada agente só lê/gerencia/fecha as PRÓPRIAS posições:
+# engine/ = 20261107, EA GoldFlipTrail = 20261108 (nunca tocadas por aqui).
+LEGACY_MAGIC = 777777
+
+
 def _safe_mt5_call(func, *args, **kwargs):
     """Executa chamadas ao MetaTrader5 protegidas por RLock e retentativas em WinError 10035.
 
@@ -580,6 +585,10 @@ class MT5Bridge:
                 return {"success": False, "comment": f"Posição #{ticket} não encontrada", "mock": False}
 
             pos = positions[0]
+            if int(getattr(pos, "magic", 0)) != int(magic):
+                log.error("[TRAVA MAGIC] Recusado fechar #%s: magic %s não pertence a este agente (%s).",
+                          ticket, getattr(pos, "magic", None), magic)
+                return {"success": False, "comment": f"magic {getattr(pos, 'magic', None)} protegido", "mock": False}
             sym = symbol or pos.symbol
             vol = float(volume or pos.volume)
             close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
@@ -710,7 +719,7 @@ class MT5Bridge:
             with _mt5_lock:
                 positions = _safe_mt5_call(mt5.positions_get)
             # [TRAVA] só gerencia/fecha posições do sistema legado (magic 777777); nunca as do engine/ (20261107)
-            positions = [p for p in (positions or []) if int(getattr(p, "magic", 0)) == 777777]
+            positions = [p for p in (positions or []) if int(getattr(p, "magic", 0)) == LEGACY_MAGIC]
             active_tickets = set()
 
             if positions:
@@ -1080,6 +1089,8 @@ class MT5Bridge:
             if positions:
                 for pos in positions:
                     floating_pnl += float(pos.profit)
+                    if int(getattr(pos, "magic", 0)) != LEGACY_MAGIC:
+                        continue  # posições do engine/ e do GoldFlip não entram no histórico dos Setores 1-6
                     pos_comment = str(pos.comment or "")
                     exec_acc = "DEMO" if "[DEMO" in pos_comment else mode
                     db.upsert_trade({
@@ -1107,7 +1118,7 @@ class MT5Bridge:
 
         if deals:
             for d in deals:
-                if d.entry == mt5.DEAL_ENTRY_OUT:
+                if d.entry == mt5.DEAL_ENTRY_OUT and int(getattr(d, "magic", 0)) == LEGACY_MAGIC:
                     profit = float(d.profit)
                     reason = "TP_HIT" if profit > 0 else "SL_HIT"
                     if profit > 0:
@@ -1302,6 +1313,8 @@ async def telemetry_loop(bridge: Optional[Any] = None, db: Optional[Any] = None,
                         positions = _safe_mt5_call(mt5.positions_get)
                     if positions:
                         for pos in positions:
+                            if int(getattr(pos, "magic", 0)) != LEGACY_MAGIC:
+                                continue
                             pos_comment = str(getattr(pos, "comment", "") or "")
                             exec_acc = "DEMO" if "[DEMO" in pos_comment else "REAL"
                             order_type = "BUY" if pos.type == getattr(mt5, "ORDER_TYPE_BUY", 0) else "SELL"

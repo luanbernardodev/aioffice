@@ -21,6 +21,9 @@ risk:
     activate_r: 1.0              # ativa em +1R ...
     activate_spread_mult: 3.0    # ... ou spread x 3, o que for maior
     atr_mult: 1.0                # trailing de 1 x ATR(M5), só a favor
+  account_guard:                 # kill switch de conta (todos os magics)
+    daily_dd_pct: 3.0            # DD diário (equity vs saldo de início do dia UTC) >= 3% -> GoldFlip enabled=false até o dia seguinte
+    check_seconds: 30
 
 regime:
   h1_ma: 100
@@ -81,6 +84,31 @@ agents:
     sl_lookback_bars: 5
     sl_buffer_atr: 0.2
     tp_r: 2.0
+
+goldflip:                        # 6º agente: EA GoldFlipTrail (MQL5) supervisionado pelo Python
+  enabled: true                  # supervisor ligado (escreve goldflip_control.json)
+  symbol: GOLD
+  magic: 20261108                # magic do EA — nenhum outro agente toca nessas posições
+  interval_seconds: 300          # reclassifica o regime a cada 5 min
+  control_ttl_seconds: 900       # EA trata controle mais velho que isso como enabled=false (fail-safe)
+  files_dir: auto                # auto = <data_path do terminal>/MQL5/Files
+  news_window_minutes: 15
+  news_keywords: ["CPI", "FOMC", "Federal Funds Rate", "Non-Farm"]
+  sessions:
+    - {tz: Europe/London, start: "07:00", end: "16:30"}
+    - {tz: America/New_York, start: "08:00", end: "17:00"}
+  regime:
+    ma_period: 100
+    atr_period: 14
+    slope_bars: 10
+    trend_dist_atr: 1.0          # |close - MA100(M5)| >= 1 x ATR(M5) ...
+    trend_slope_atr: 0.3         # ... e MA100 inclinada >= 0.3 x ATR em 10 barras na mesma direção ...
+                                 # ... e M1 do mesmo lado da MA100(M1) -> TENDÊNCIA; senão LATERAL
+  params:                        # o que o supervisor escreve por regime (trail em múltiplos de ATR)
+    trend:   {enabled: true,  trail_atr: 1.5}
+    lateral: {enabled: false, trail_atr: 0.8}   # flip+trail em lateral = serrote; ajuste se o EA tiver lógica própria p/ range
+  min_atr: 1.5                   # ATR(M5) mínimo em USD para operar (mercado morto -> enabled=false)
+  max_spread_atr: 0.15           # max_spread (pontos) = 0.15 x ATR(M5) / point
 
 backtest:
   spread_mult: 1.5               # spread das barras do MT5 é o MÍNIMO da barra -> inflaciona

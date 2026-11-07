@@ -67,3 +67,10 @@ Eventos de notícia históricos para o backtest (opcional): `config/news_events.
 3. Duplo clique em `start_engine.bat` (ordens reais na DEMO, reinicia sozinho se cair).
 4. **Não** rode o `main.py` legado junto, nem o motor em duas máquinas na mesma conta.
 Logs: `logs/engine.log` · trades: `logs/trades.csv`.
+
+### 6º agente: EA GoldFlipTrail (magic 20261108)
+O EA executa no MT5; `agents/goldflip_supervisor.py` (dentro do `run_engine.py`) controla via `MQL5/Files/goldflip_control.json`
+a cada 5 min (regime ATR/MA100, sessões Londres/NY, ±15 min de CPI/FOMC/NFP, kill switch de DD diário 3%) e lê `goldflip_status.json`.
+1. Copie `mql5/Include/GoldFlipControl.mqh` para `MQL5\Include` do terminal.
+2. No EA: `#include <GoldFlipControl.mqh>`, `GF_Timer` no OnInit/OnTimer (60s), `GF_CanOpen()` antes de abrir/flipar.
+3. Nenhum outro agente fecha posições de outro magic (legado 777777, engine 20261107, GoldFlip 20261108).

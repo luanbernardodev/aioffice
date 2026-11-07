@@ -127,3 +127,56 @@ class RiskManager:
             if new < pos.sl - 1e-9 and new > ask:
                 return new
         return None
+
+
+# ============================================================ kill switch de conta (todos os magics)
+class AccountGuard:
+    """Soma a exposição de um símbolo em TODOS os magics e dispara o kill switch por DD diário.
+
+    DD diário = (saldo de início do dia UTC - equity) / saldo de início do dia.
+    Saldo de início do dia = saldo atual - P&L realizado hoje (todos os magics) -> sobrevive a restart.
+    Disparado, fica travado até a virada do dia UTC.
+    """
+
+    def __init__(self, cfg: Dict[str, Any]) -> None:
+        g = cfg.get("risk", {}).get("account_guard", {})
+        self.dd_limit_pct = float(g.get("daily_dd_pct", 3.0))
+        self.killed_until: Optional[datetime] = None
+        self.kill_reason = ""
+        self.last: Dict[str, Any] = {}
+
+    @staticmethod
+    def exposure(positions: list, symbol: str) -> Dict[str, Any]:
+        """positions: objetos com symbol, magic, type (0=buy,1=sell), volume, profit."""
+        by_magic: Dict[int, Dict[str, float]] = {}
+        net = gross = pnl = 0.0
+        for p in positions or []:
+            if str(p.symbol) != symbol:
+                continue
+            sgn = 1.0 if int(p.type) == 0 else -1.0
+            vol = float(p.volume)
+            m = by_magic.setdefault(int(p.magic), {"net_lots": 0.0, "gross_lots": 0.0, "pnl": 0.0, "count": 0})
+            m["net_lots"] += sgn * vol
+            m["gross_lots"] += vol
+            m["pnl"] += float(p.profit)
+            m["count"] += 1
+            net += sgn * vol
+            gross += vol
+            pnl += float(p.profit)
+        return {"symbol": symbol, "net_lots": round(net, 2), "gross_lots": round(gross, 2),
+                "floating_pnl": round(pnl, 2), "by_magic": by_magic}
+
+    def evaluate(self, now: datetime, balance: float, equity: float, realized_today: float) -> Tuple[bool, float]:
+        """Retorna (kill_ativo, dd_pct). Trava até o próximo dia UTC quando dd >= limite."""
+        if self.killed_until and now >= self.killed_until:
+            self.killed_until, self.kill_reason = None, ""
+        start = balance - realized_today
+        dd_pct = max(0.0, (start - equity) / start * 100.0) if start > 0 else 0.0
+        if dd_pct >= self.dd_limit_pct and self.killed_until is None:
+            self.killed_until = datetime.combine(now.date() + timedelta(days=1), datetime.min.time(),
+                                                 tzinfo=now.tzinfo)
+            self.kill_reason = f"DD diário {dd_pct:.2f}% >= {self.dd_limit_pct}%"
+            log.warning("[A5 KILL SWITCH] %s (início do dia %.2f, equity %.2f). GoldFlip desligado até %s",
+                        self.kill_reason, start, equity, self.killed_until)
+        self.last = {"dd_pct": round(dd_pct, 2), "day_start_balance": round(start, 2), "equity": round(equity, 2)}
+        return self.killed_until is not None, dd_pct

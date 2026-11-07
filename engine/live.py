@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -111,6 +112,17 @@ def run(cfg: Dict[str, Any], dry_run: bool) -> None:
         _seed_risk_from_history(mt5, cfg, engine)
         broker.sync()
 
+    # 6º agente: supervisor do EA GoldFlipTrail (não opera; controla o EA via JSON em MQL5/Files)
+    supervisor = None
+    if cfg.get("goldflip", {}).get("enabled"):
+        from agents.goldflip_supervisor import GoldFlipSupervisor
+        try:
+            supervisor = GoldFlipSupervisor(mt5, cfg)
+            supervisor.start()
+        except Exception as exc:  # noqa: BLE001
+            log.exception("[GOLDFLIP] supervisor não iniciou (motor segue sem ele): %s", exc)
+            supervisor = None
+
     log.info("=== MOTOR DETERMINÍSTICO | conta #%s DEMO | DRY_RUN=%s | ativos=%s ===", info.login, dry_run, symbols)
     last_bar: Dict[str, int] = {}
     last_hb = 0.0
@@ -145,11 +157,17 @@ def run(cfg: Dict[str, Any], dry_run: bool) -> None:
                     engine.on_bar(s, feats, i, now, spread=max(tick.ask - tick.bid, 0.0), quote=(tick.bid, tick.ask))
                 except Exception as exc:  # noqa: BLE001
                     log.exception("[%s] falha no ciclo de barra: %s", s, exc)
+            if supervisor is not None:
+                try:
+                    supervisor.tick(datetime.now(timezone.utc))
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("[GOLDFLIP] falha no ciclo do supervisor: %s", exc)
             if time.time() - last_hb >= 60:
                 last_hb = time.time()
                 log.info("[HEARTBEAT] posições=%d pendentes=%d | dia=%.2f USD | streak=%d | %s",
                          len(broker.open_positions()), len(broker.pending_orders()), engine.risk.day_pnl,
-                         engine.risk.streak, " | ".join(f"{k}: {v}" for k, v in engine.last_status.items()))
+                         engine.risk.streak, " | ".join(f"{k}: {v}" for k, v in engine.last_status.items())
+                         + (f" | {supervisor.summary()}" if supervisor is not None else ""))
             time.sleep(max(0.0, 1.0 - (time.time() - loop_t)))
     except KeyboardInterrupt:
         log.info("Encerrando motor...")
