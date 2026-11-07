@@ -709,6 +709,8 @@ class MT5Bridge:
             self.ensure_connection()
             with _mt5_lock:
                 positions = _safe_mt5_call(mt5.positions_get)
+            # [TRAVA] só gerencia/fecha posições do sistema legado (magic 777777); nunca as do engine/ (20261107)
+            positions = [p for p in (positions or []) if int(getattr(p, "magic", 0)) == 777777]
             active_tickets = set()
 
             if positions:

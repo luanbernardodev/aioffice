@@ -52,6 +52,7 @@ def test_exposure_limits(cfg):
 
 def test_daily_stop_pauses_until_next_day(cfg):
     rm = RiskManager(cfg)
+    rm.daily_stop = 30.0
     t = datetime(2026, 11, 4, 14, 0, tzinfo=timezone.utc)
     rm.on_trade_closed(closed(-20, t))
     assert rm.trading_allowed(t)[0]

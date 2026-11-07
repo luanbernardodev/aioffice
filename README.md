@@ -60,3 +60,10 @@ python run_engine.py --live-demo                  # ordens reais na DEMO 3096737
 ```
 Trades: `logs/trades.csv` (demo) / `logs/trades_paper.csv` (dry-run). Relatórios: `reports/`.
 Eventos de notícia históricos para o backtest (opcional): `config/news_events.csv` com colunas `datetime_utc,title`.
+
+### VPS (conta DEMO)
+1. MT5 aberto, logado na demo 309673774, botão **Algo Trading** ligado.
+2. `pip install -r requirements.txt`
+3. Duplo clique em `start_engine.bat` (ordens reais na DEMO, reinicia sozinho se cair).
+4. **Não** rode o `main.py` legado junto, nem o motor em duas máquinas na mesma conta.
+Logs: `logs/engine.log` · trades: `logs/trades.csv`.

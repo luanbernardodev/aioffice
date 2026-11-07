@@ -11,7 +11,7 @@ account:
 risk:
   max_positions_total: 6         # conta posições abertas + ordens pendentes
   max_positions_per_symbol: 3
-  daily_stop_usd: 30.0           # perda realizada no dia (UTC) -> pausa até o dia seguinte
+  daily_stop_usd: 10.0           # perda realizada no dia (UTC) -> pausa até o dia seguinte (~16% de US$62)
   max_consecutive_losses: 4
   streak_pause_minutes: 120
   min_sl_atr: 1.0                # SL mínimo = 1 x ATR(M5)
@@ -32,7 +32,7 @@ regime:
 
 symbols:
   GOLD:
-    enabled: true
+    enabled: false               # US$62 de saldo: 0.01 lote arrisca ~US$7-12/trade (11-19%). Religar com conta >= ~US$1000
     lot: 0.01
     max_spread_atr: 0.15
     sessions:                    # janelas locais; vale se estiver em QUALQUER uma

@@ -46,6 +46,38 @@ def _rates(mt5: Any, symbol: str, tf: str, n: int, server_time: str) -> pd.DataF
     return df
 
 
+def _seed_risk_from_history(mt5: Any, cfg: Dict[str, Any], engine: Engine) -> None:
+    """Após restart: recupera P&L realizado do dia (UTC) e sequência de perdas do magic do motor."""
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    magic = int(cfg["account"]["magic"])
+    # history_deals_get usa horário do servidor; margem de 1 dia e filtro posterior em UTC
+    deals = mt5.history_deals_get(start - timedelta(days=1), now + timedelta(days=1)) or []
+    outs = [d for d in deals if d.magic == magic and d.entry == getattr(mt5, "DEAL_ENTRY_OUT", 1)]
+    srv = cfg["account"].get("server_time", "ny_plus_7")
+    day_pnl, results = 0.0, []
+    for d in sorted(outs, key=lambda x: x.time):
+        pnl = float(d.profit) + float(d.swap) + float(d.commission)
+        results.append(pnl)
+        if server_to_utc([int(d.time)], srv).iloc[0] >= pd.Timestamp(start):
+            day_pnl += pnl
+    engine.risk._roll_day(now)
+    engine.risk.day_pnl = day_pnl
+    streak = 0
+    for pnl in reversed(results):
+        if pnl < 0:
+            streak += 1
+        else:
+            break
+    engine.risk.streak = streak
+    log.info("[A5] Estado recuperado: P&L do dia %.2f USD | perdas seguidas %d", day_pnl, streak)
+    if day_pnl <= -engine.risk.daily_stop:
+        nxt = start + timedelta(days=1)
+        engine.risk.paused_until, engine.risk.pause_reason = nxt, "daily_stop"
+        log.warning("[A5] Stop diário já atingido hoje: pausado até %s", nxt)
+
+
 def run(cfg: Dict[str, Any], dry_run: bool) -> None:
     import MetaTrader5 as mt5
     from dotenv import load_dotenv
@@ -75,6 +107,9 @@ def run(cfg: Dict[str, Any], dry_run: bool) -> None:
                             str(ROOT / "config" / "news_events.csv"))
     calendar.start_background_refresh()
     engine = Engine(cfg, broker, calendar=calendar, trade_logger=tlog, verbose=True)
+    if not dry_run:
+        _seed_risk_from_history(mt5, cfg, engine)
+        broker.sync()
 
     log.info("=== MOTOR DETERMINÍSTICO | conta #%s DEMO | DRY_RUN=%s | ativos=%s ===", info.login, dry_run, symbols)
     last_bar: Dict[str, int] = {}
