@@ -56,15 +56,17 @@ def reg(regime="trend", atr=4.0, d=1):
 
 def test_control_trend_in_session(cfg):
     c = decide_control(reg(), WED_LONDON, cfg["goldflip"], point=0.01)
-    assert c["enabled"] is True and c["trail_atr"] == 1.5
+    assert c["enabled"] is True and c["flatten"] is False and c["trail_atr"] == 1.5
     assert c["max_spread"] == int(0.15 * 4.0 / 0.01)          # 60 pontos
     assert c["valid_until"] - c["updated_at"] == 900
 
 
 def test_control_off_outside_session_lateral_lowatr_news_kill(cfg):
     g = cfg["goldflip"]
-    assert decide_control(reg(), WED_ASIA, g, 0.01)["enabled"] is False
-    assert decide_control(reg("lateral", d=0), WED_LONDON, g, 0.01)["enabled"] is False
+    asia = decide_control(reg(), WED_ASIA, g, 0.01)
+    assert asia["enabled"] is False and asia["flatten"] is True             # fora de sessão: zera
+    lat = decide_control(reg("lateral", d=0), WED_LONDON, g, 0.01)
+    assert lat["enabled"] is False and lat["flatten"] is False              # lateral: só não abre
     assert decide_control(reg(atr=1.0), WED_LONDON, g, 0.01)["enabled"] is False
     assert decide_control(reg("unknown", atr=float("nan"), d=0), WED_LONDON, g, 0.01)["enabled"] is False
     cal = NewsCalendar(g["news_keywords"], g["news_window_minutes"])
@@ -72,7 +74,7 @@ def test_control_off_outside_session_lateral_lowatr_news_kill(cfg):
     assert decide_control(reg(), WED_LONDON, g, 0.01, cal)["enabled"] is False             # NFP em 10 min
     assert decide_control(reg(), datetime(2026, 11, 4, 10, 30, tzinfo=timezone.utc), g, 0.01, cal)["enabled"]  # +20 min
     k = decide_control(reg(), WED_LONDON, g, 0.01, kill_reason="DD diário 3.2%")
-    assert k["enabled"] is False and "KILL" in k["reason"]
+    assert k["enabled"] is False and k["flatten"] is True and "KILL" in k["reason"]
 
 
 def test_json_atomic_roundtrip_ascii(tmp_path):

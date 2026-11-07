@@ -72,13 +72,14 @@ def decide_control(reg: Dict[str, Any], now: datetime, gcfg: Dict[str, Any], poi
     atr_ok = atr is not None and not (isinstance(atr, float) and np.isnan(atr)) and atr > 0
     enabled = bool(params.get("enabled", False))
     reason = f"regime={reg.get('regime')}"
+    flatten = False                      # True = EA zera a posição (fora de sessão, notícia, kill switch)
     min_atr = float(gcfg.get("min_atr", 1.5))
     if kill_reason:
-        enabled, reason = False, f"KILL SWITCH A5: {kill_reason}"
+        enabled, flatten, reason = False, True, f"KILL SWITCH A5: {kill_reason}"
     elif not in_session(now, gcfg.get("sessions") or []):
-        enabled, reason = False, "fora de sessão Londres/NY"
+        enabled, flatten, reason = False, True, "fora de sessão Londres/NY"
     elif calendar is not None and calendar.blocking_event(now):
-        enabled, reason = False, f"janela de notícia: {calendar.blocking_event(now)}"
+        enabled, flatten, reason = False, True, f"janela de notícia: {calendar.blocking_event(now)}"
     elif not atr_ok:
         enabled, reason = False, "ATR indisponível"
     elif atr < min_atr:
@@ -87,7 +88,7 @@ def decide_control(reg: Dict[str, Any], now: datetime, gcfg: Dict[str, Any], poi
         reason = f"regime={reg.get('regime')} (desligado por config)"
     max_spread = int(float(gcfg.get("max_spread_atr", 0.15)) * atr / point) if atr_ok and point > 0 else 0
     ts = int(now.timestamp())
-    return {"enabled": enabled, "trail_atr": float(params.get("trail_atr", 1.0)), "min_atr": min_atr,
+    return {"enabled": enabled, "flatten": flatten, "trail_atr": float(params.get("trail_atr", 1.0)), "min_atr": min_atr,
             "max_spread": max_spread, "regime": reg.get("regime"), "direction": int(reg.get("direction", 0)),
             "atr_m5": float(atr) if atr_ok else 0.0, "reason": reason, "updated_at": ts,
             "valid_until": ts + int(gcfg.get("control_ttl_seconds", 900)), "source": "quant-office/goldflip_supervisor"}
@@ -181,8 +182,8 @@ class GoldFlipSupervisor:
         self.control = ctl
         self.status = read_json(self.dir / STATUS_FILE)
         (log.warning if changed else log.info)(
-            "[GOLDFLIP] enabled=%s regime=%s dir=%+d trail=%.2fxATR min_atr=%.2f max_spread=%dpts ATR=%.2f | %s",
-            ctl["enabled"], ctl["regime"], ctl["direction"], ctl["trail_atr"], ctl["min_atr"], ctl["max_spread"],
+            "[GOLDFLIP] enabled=%s flatten=%s regime=%s dir=%+d trail=%.2fxATR min_atr=%.2f max_spread=%dpts ATR=%.2f | %s",
+            ctl["enabled"], ctl["flatten"], ctl["regime"], ctl["direction"], ctl["trail_atr"], ctl["min_atr"], ctl["max_spread"],
             ctl["atr_m5"], ctl["reason"])
         self._log_status()
         return ctl
@@ -190,7 +191,7 @@ class GoldFlipSupervisor:
     def force_disable(self, reason: str, now: datetime) -> None:
         ctl = dict(self.control) if self.control else decide_control({"regime": "unknown"}, now, self.g, 0.01)
         ts = int(now.timestamp())
-        ctl.update({"enabled": False, "reason": f"KILL SWITCH A5: {reason}", "updated_at": ts,
+        ctl.update({"enabled": False, "flatten": True, "reason": f"KILL SWITCH A5: {reason}", "updated_at": ts,
                     "valid_until": ts + int(self.g.get("control_ttl_seconds", 900))})
         write_json_atomic(self.dir / CONTROL_FILE, ctl)
         self.control = ctl

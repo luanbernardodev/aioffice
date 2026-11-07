@@ -27,6 +27,8 @@ struct GFControl
   {
    bool              loaded;
    bool              enabled;
+   bool              flatten;      // true = zerar posição (fora de sessão, notícia, kill switch)
+   int               direction;    // +1/-1 tendência do supervisor, 0 = sem tendência
    double            trail_atr;
    double            min_atr;
    int               max_spread;   // pontos
@@ -91,11 +93,14 @@ bool GF_ReadControl(GFControl &c)
      {
       c.loaded  = false;
       c.enabled = false;
+      c.flatten = false;
       PrintFormat("[GoldFlipControl] %s ausente/ilegível -> entradas bloqueadas", GF_CONTROL_FILE);
       return false;
      }
    bool was = c.enabled;
    c.enabled     = (GF_JsonRaw(js, "enabled") == "true");
+   c.flatten     = (GF_JsonRaw(js, "flatten") == "true");
+   c.direction   = (int)StringToInteger(GF_JsonRaw(js, "direction"));
    c.trail_atr   = StringToDouble(GF_JsonRaw(js, "trail_atr"));
    c.min_atr     = StringToDouble(GF_JsonRaw(js, "min_atr"));
    c.max_spread  = (int)StringToInteger(GF_JsonRaw(js, "max_spread"));
@@ -111,8 +116,8 @@ bool GF_ReadControl(GFControl &c)
                   (long)TimeGMT() - c.valid_until);
      }
    if(was != c.enabled)
-      PrintFormat("[GoldFlipControl] enabled=%s regime=%s trail=%.2fxATR min_atr=%.2f max_spread=%d | %s",
-                  c.enabled ? "true" : "false", c.regime, c.trail_atr, c.min_atr, c.max_spread, c.reason);
+      PrintFormat("[GoldFlipControl] enabled=%s flatten=%s dir=%d regime=%s trail=%.2fxATR min_atr=%.2f max_spread=%d | %s",
+                  c.enabled ? "true" : "false", c.flatten ? "true" : "false", c.direction, c.regime, c.trail_atr, c.min_atr, c.max_spread, c.reason);
    return true;
   }
 
