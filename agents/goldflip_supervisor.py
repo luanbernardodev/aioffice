@@ -18,7 +18,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -198,25 +198,37 @@ class GoldFlipSupervisor:
         log.warning("[GOLDFLIP] FORÇADO enabled=false -> %s", reason)
 
     # ------------------------------------------------------------ A5: exposição + kill switch
-    def _realized_today(self, now: datetime) -> float:
+    def _realized_today(self, now: datetime) -> Tuple[float, Dict[int, float]]:
+        """(realizado hoje em todas as operações, realizado hoje por magic). Depósitos/créditos ficam fora."""
         start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
         deals = self.mt5.history_deals_get(start - timedelta(days=1), now + timedelta(days=1)) or []
         srv = self.cfg["account"].get("server_time", "ny_plus_7")
-        total = 0.0
+        total, by_magic = 0.0, {}
         for d in deals:
             if int(d.type) not in (0, 1):            # ignora depósitos/créditos (DEAL_TYPE_BALANCE etc.)
                 continue
             if server_to_utc([int(d.time)], srv).iloc[0] >= pd.Timestamp(start):
-                total += float(d.profit) + float(d.swap) + float(d.commission)
-        return total
+                v = float(d.profit) + float(d.swap) + float(d.commission)
+                total += v
+                by_magic[int(d.magic)] = by_magic.get(int(d.magic), 0.0) + v
+        return total, by_magic
 
     def check_risk(self, now: datetime) -> None:
         info = self.mt5.account_info()
         if info is None:
             return
-        self.exposure = AccountGuard.exposure(self.mt5.positions_get() or [], self.symbol)
+        positions = self.mt5.positions_get() or []
+        self.exposure = AccountGuard.exposure(positions, self.symbol)     # exposição GOLD de TODOS os magics
+        realized_all, realized_by_magic = self._realized_today(now)
+        start = float(info.balance) - realized_all
+        if self.guard.scope == "account":
+            pnl = float(info.equity) - start
+        else:                                                             # só os agentes
+            pnl = sum(v for m, v in realized_by_magic.items() if m in self.guard.magics)
+            pnl += sum(float(p.profit) + float(getattr(p, "swap", 0.0)) for p in positions
+                       if int(p.magic) in self.guard.magics)
         was_killed = bool(self.guard.kill_reason)
-        killed, dd = self.guard.evaluate(now, float(info.balance), float(info.equity), self._realized_today(now))
+        killed, dd = self.guard.evaluate(now, start, pnl)
         if killed and (not was_killed or self.control.get("enabled")):
             self.force_disable(self.guard.kill_reason, now)
 

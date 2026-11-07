@@ -101,11 +101,13 @@ def test_exposure_sums_all_magics():
 def test_kill_switch_at_3pct_and_latches_until_next_day(cfg):
     g = AccountGuard(cfg)
     t = WED_LONDON
-    assert g.evaluate(t, balance=100.0, equity=98.0, realized_today=0.0) == (False, pytest.approx(2.0))
-    killed, dd = g.evaluate(t, balance=99.0, equity=97.0, realized_today=-1.0)   # início 100 -> 3%
+    assert g.evaluate(t, day_start_balance=100.0, pnl_today=-2.0) == (False, pytest.approx(2.0))
+    killed, dd = g.evaluate(t, 100.0, -3.0)
     assert killed and dd == pytest.approx(3.0)
-    assert g.evaluate(t, balance=99.0, equity=99.5, realized_today=-1.0)[0]       # recuperou, mas segue travado
-    assert not g.evaluate(datetime(2026, 11, 5, 0, 1, tzinfo=timezone.utc), 99.0, 99.0, 0.0)[0]
+    assert g.evaluate(t, 100.0, +1.0)[0]                                           # recuperou, mas segue travado
+    assert not g.evaluate(datetime(2026, 11, 5, 0, 1, tzinfo=timezone.utc), 100.0, 0.0)[0]
+    big = AccountGuard(cfg)                                                        # escala com o saldo (aportes)
+    assert not big.evaluate(t, 5000.0, -100.0)[0] and big.evaluate(t, 5000.0, -150.0)[0]
 
 
 class FakeMT5:
@@ -149,6 +151,18 @@ def test_supervisor_writes_control_and_kill_forces_disable(cfg, tmp_path):
     assert json.loads((sup.dir / CONTROL_FILE).read_text())["enabled"] is False
     sup.run_cycle(WED_LONDON)                              # novo ciclo não religa durante o dia
     assert json.loads((sup.dir / CONTROL_FILE).read_text())["enabled"] is False
+
+
+def test_manual_positions_do_not_trigger_agents_scope(cfg, tmp_path):
+    mt5 = FakeMT5(tmp_path, equity=71.0, balance=100.0)
+    mt5.positions_get = lambda: [P(symbol="BRENTCash", magic=0, vol=0.02, profit=-29.0)]   # Brent manual
+    sup = GoldFlipSupervisor(mt5, cfg, calendar=NewsCalendar([], 15))
+    sup.check_risk(WED_LONDON)
+    assert not sup.guard.kill_reason                       # scope=agents: operação manual ignorada
+    cfg["risk"]["account_guard"]["scope"] = "account"
+    sup2 = GoldFlipSupervisor(mt5, cfg, calendar=NewsCalendar([], 15))
+    sup2.check_risk(WED_LONDON)
+    assert sup2.guard.kill_reason                          # scope=account: dispara
 
 
 def test_supervisor_reads_ea_status(cfg, tmp_path):
