@@ -57,6 +57,8 @@ def intent_from_dict(d: dict) -> OrderIntent:
 
 
 class MT5Broker:
+    _last_state: Optional[str] = None
+
     def __init__(self, mt5: Any, cfg: Dict[str, Any], specs: Dict[str, Dict[str, float]]) -> None:
         self.mt5 = mt5
         self.cfg = cfg
@@ -81,8 +83,22 @@ class MT5Broker:
                 log.warning("Estado MT5 ilegível (%s); começando limpo.", exc)
 
     def _save_state(self) -> None:
+        """Grava só se mudou e de forma atômica: uma queda no meio nunca deixa o arquivo vazio."""
+        payload = json.dumps({"meta": self.meta, "pending": self.pending_map}, default=str)
+        if payload == self._last_state:
+            return
         STATE_FILE.parent.mkdir(exist_ok=True)
-        STATE_FILE.write_text(json.dumps({"meta": self.meta, "pending": self.pending_map}, default=str))
+        tmp = STATE_FILE.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.replace(tmp, STATE_FILE)
+        except PermissionError as exc:              # arquivo momentaneamente em uso: tenta no próximo ciclo
+            log.warning("Estado MT5 não gravado (%s); nova tentativa no próximo ciclo.", exc)
+            return
+        self._last_state = payload
 
     # ------------------------------------------------------------ consultas
     def pending_orders(self, symbol: Optional[str] = None) -> List[OrderIntent]:

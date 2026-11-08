@@ -126,3 +126,32 @@ def test_account_guard(cfg, monkeypatch):
         verify_account(FakeMT5(410574578, 2), cfg)               # REAL sem a variável de autorização
     monkeypatch.setenv("QUANT_ALLOW_REAL", "I_AUTHORIZE")
     assert verify_account(FakeMT5(410574578, 2), cfg)
+
+
+def test_mt5_broker_state_is_atomic(tmp_path, monkeypatch):
+    import builtins
+    import json
+    import os
+    import engine.mt5_broker as mb
+
+    f = tmp_path / "state" / "mt5_meta.json"
+    monkeypatch.setattr(mb, "STATE_FILE", f)
+    b = mb.MT5Broker.__new__(mb.MT5Broker)
+    b.meta, b.pending_map = {"1": {"symbol": "BTCUSD"}}, {"k": 1}
+    b._save_state()
+    assert json.loads(f.read_text())["pending"] == {"k": 1}
+
+    calls = []
+    real_replace = os.replace
+    monkeypatch.setattr(mb.os, "replace", lambda *a: calls.append(a) or real_replace(*a))
+    b._save_state()
+    assert calls == []                                   # sem mudança: não regrava
+
+    def queda(*a, **k):
+        raise OSError("queda no meio da gravação")
+    b.pending_map = {"k": 2}
+    monkeypatch.setattr(builtins, "open", queda)
+    with pytest.raises(OSError):
+        b._save_state()
+    monkeypatch.undo()
+    assert json.loads(f.read_text())["pending"] == {"k": 1}   # arquivo anterior intacto
