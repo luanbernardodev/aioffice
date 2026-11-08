@@ -12,7 +12,7 @@ import time as _time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -48,8 +48,6 @@ def in_session(ts_utc: datetime, sessions: List[Dict[str, str]]) -> bool:
 class NewsCalendar:
     """Eventos de alto impacto (USD): CPI/FOMC/NFP/PCE. Fontes: CSV local e/ou ForexFactory (thread de fundo)."""
 
-    FF_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-
     def __init__(self, keywords: Iterable[str], window_minutes: int = 30, csv_path: Optional[str] = None) -> None:
         self.keywords = [k.lower() for k in keywords]
         self.window = timedelta(minutes=window_minutes)
@@ -76,14 +74,12 @@ class NewsCalendar:
                     when = when.tz_localize("UTC") if when.tzinfo is None else when.tz_convert("UTC")
                     self.add_event(when.to_pydatetime(), row["title"])
 
-    def refresh_from_forexfactory(self, timeout: float = 10.0) -> int:
-        import requests  # import local: fora do caminho crítico
-        resp = requests.get(self.FF_URL, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
-        resp.raise_for_status()
+    def ingest(self, raw_events: List[Dict[str, Any]]) -> int:
+        """Aplica o filtro deste calendário (USD, alto impacto, palavras-chave) aos eventos baixados."""
         n = 0
         with self._lock:
             known = {(w, t) for w, t in self._events}
-        for ev in resp.json():
+        for ev in raw_events:
             if str(ev.get("country")).upper() != "USD" or str(ev.get("impact")).lower() != "high":
                 continue
             title = str(ev.get("title", ""))
@@ -95,18 +91,9 @@ class NewsCalendar:
                 n += 1
         return n
 
-    def start_background_refresh(self, every_hours: float = 6.0) -> threading.Thread:
-        def _loop():
-            while True:
-                try:
-                    n = self.refresh_from_forexfactory()
-                    log.info("[A1] Calendário atualizado (+%d eventos de alto impacto)", n)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("[A1] Falha ao atualizar calendário: %s", exc)
-                _time.sleep(every_hours * 3600)
-        t = threading.Thread(target=_loop, name="NewsCalendar", daemon=True)
-        t.start()
-        return t
+    def start_background_refresh(self) -> None:
+        """Inscreve este calendário no download único compartilhado."""
+        _FEED.subscribe(self)
 
     def blocking_event(self, ts_utc: datetime) -> Optional[str]:
         with self._lock:
@@ -114,6 +101,70 @@ class NewsCalendar:
                 if abs(when - ts_utc) <= self.window:
                     return f"{title} @ {when:%Y-%m-%d %H:%M}Z"
         return None
+
+
+class CalendarFeed:
+    """Um único download do ForexFactory por processo, repassado a todos os calendários inscritos.
+
+    Falha (ex.: 429) -> nova tentativa em 5, 10, 20... até 60 min, em vez de esperar o ciclo normal de 6 h.
+    """
+
+    URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+    OK_SECONDS = 6 * 3600
+    RETRY_SECONDS = 300
+    MAX_RETRY_SECONDS = 3600
+
+    def __init__(self, fetch: Optional[Callable[[], List[Dict[str, Any]]]] = None) -> None:
+        self._fetch = fetch or self._download
+        self._subs: List["NewsCalendar"] = []
+        self._raw: Optional[List[Dict[str, Any]]] = None
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._failures = 0
+
+    def _download(self) -> List[Dict[str, Any]]:
+        import requests  # import local: fora do caminho crítico
+        resp = requests.get(self.URL, timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        return resp.json()
+
+    def subscribe(self, calendar: "NewsCalendar") -> None:
+        with self._lock:
+            self._subs.append(calendar)
+            raw = self._raw
+            start = self._thread is None
+            if start:
+                self._thread = threading.Thread(target=self._loop, name="CalendarFeed", daemon=True)
+        if raw is not None:                 # inscrito depois do download já recebe os eventos
+            calendar.ingest(raw)
+        if start:
+            self._thread.start()
+
+    def cycle(self) -> float:
+        """Um download. Retorna quantos segundos esperar até o próximo."""
+        try:
+            raw = self._fetch()
+        except Exception as exc:  # noqa: BLE001
+            self._failures += 1
+            wait = min(self.RETRY_SECONDS * 2 ** (self._failures - 1), self.MAX_RETRY_SECONDS)
+            log.warning("[A1] Falha ao atualizar calendário (%s). Nova tentativa em %d min.", exc, wait // 60)
+            return wait
+        self._failures = 0
+        with self._lock:
+            self._raw = raw
+            subs = list(self._subs)
+        added = [c.ingest(raw) for c in subs]
+        log.info("[A1] Calendário atualizado: novos eventos por filtro=%s", added)
+        return self.OK_SECONDS
+
+    def _loop(self) -> None:
+        time_to_wait = 2.0                  # deixa todos os componentes se inscreverem antes do 1º download
+        while True:
+            _time.sleep(time_to_wait)
+            time_to_wait = self.cycle()
+
+
+_FEED = CalendarFeed()
 
 
 def check_gates(ts_utc: datetime, scfg: Dict[str, Any], spread: float, atr_m5: float,

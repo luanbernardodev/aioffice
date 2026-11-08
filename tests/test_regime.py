@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from engine.regime import NewsCalendar, check_gates, in_session
+from engine.regime import CalendarFeed, NewsCalendar, check_gates, in_session
 
 
 def utc(*a):
@@ -38,3 +38,39 @@ def test_news_window(cfg):
     assert check_gates(utc(2026, 11, 4, 14, 1), g, 0.1, 4.0, cal).ok
     assert cal.matches("Non-Farm Employment Change") and cal.matches("Core PCE Price Index m/m")
     assert not cal.matches("Unemployment Claims")
+
+
+FF_EVENTS = [{"country": "USD", "impact": "High", "title": "CPI m/m", "date": "2026-11-12T08:30:00-05:00"},
+             {"country": "USD", "impact": "High", "title": "Core PCE Price Index m/m", "date": "2026-11-13T08:30:00-05:00"},
+             {"country": "EUR", "impact": "High", "title": "CPI y/y", "date": "2026-11-12T05:00:00-05:00"}]
+
+
+def test_feed_downloads_once_for_all_calendars():
+    calls = []
+    feed = CalendarFeed(fetch=lambda: calls.append(1) or FF_EVENTS)
+    a = NewsCalendar(["CPI", "PCE"], 30)
+    b = NewsCalendar(["CPI"], 15)
+    feed._subs += [a, b]
+    assert feed.cycle() == CalendarFeed.OK_SECONDS and len(calls) == 1
+    t = utc(2026, 11, 13, 13, 30)
+    assert a.blocking_event(t) and not b.blocking_event(t)        # cada um mantém filtro e janela próprios
+    assert b.blocking_event(utc(2026, 11, 12, 13, 40))
+    assert not b.blocking_event(utc(2026, 11, 12, 13, 50))
+    feed.cycle()
+    assert len(a._events) == 2                                     # sem duplicar
+
+
+def test_feed_retries_soon_after_429_and_backs_off():
+    answers = [RuntimeError("429"), RuntimeError("429"), FF_EVENTS]
+
+    def fetch():
+        r = answers.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    feed = CalendarFeed(fetch=fetch)
+    cal = NewsCalendar(["CPI"], 30)
+    feed._subs.append(cal)
+    assert feed.cycle() == 300 and feed.cycle() == 600 and not cal._events
+    assert feed.cycle() == CalendarFeed.OK_SECONDS and cal._events
