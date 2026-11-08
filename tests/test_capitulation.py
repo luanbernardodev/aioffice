@@ -158,3 +158,34 @@ def test_ignores_other_magics(agent):
                                              price_open=900.0, sl=800.0, tp=0.0, time=BASE, profit=-99.0, swap=0.0)]
     agent.step()
     assert agent.mt5.sent == [] and not agent.state["halted"]
+
+
+def test_rsi20_one_entry_per_episode(cfg, tmp_path, monkeypatch):
+    a = CapitulationAgent(FakeMT5(), cfg, tmp_path / "r.json", tmp_path / "r.csv", section="rsi20")
+    a.start()
+    bars = {"t": BASE}
+
+    def bar_df(n):
+        k = 200
+        return pd.DataFrame({"time": bars["t"] - 300 * np.arange(k)[::-1], "open": 1000.0, "high": 1010.0, "low": 990.0,
+                             "close": 1000.0, "spread": 40})
+
+    monkeypatch.setattr(a, "_bars", bar_df)
+
+    def fire(r):
+        bars["t"] += 300
+        monkeypatch.setattr(a, "_live_rsi", lambda *x: r)
+        a.mt5.now = bars["t"] + 301
+        a._new_bar(a._positions(), a.mt5.symbol_info_tick("BTCUSD"))
+
+    fire(21.0)
+    assert a.mt5.sent == []
+    fire(19.0)
+    assert len(a.mt5.sent) == 1 and a.mt5.sent[0]["magic"] == 20261112
+    a.mt5.pos.clear()
+    fire(25.0)
+    fire(18.0)
+    assert len(a.mt5.sent) == 1          # mesma queda, sem recompra
+    fire(31.0)
+    fire(19.0)
+    assert len(a.mt5.sent) == 2          # RSI voltou a 30: novo episódio

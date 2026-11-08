@@ -29,14 +29,14 @@ class CapitulationAgent(Sweep48Agent):
     """Reaproveita persistência, CSV, envio e sincronização de SL do Sweep48Agent; gerencia várias posições."""
 
     def __init__(self, mt5: Any, cfg: Dict[str, Any], state_path: Optional[Path] = None,
-                 csv_path: Optional[Path] = None) -> None:
+                 csv_path: Optional[Path] = None, section: str = "capitulation") -> None:
         self.mt5, self.cfg = mt5, cfg
-        self.g = cfg["capitulation"]
+        self.g = cfg[section]
         self.symbol = self.g["symbol"]
         self.magic = int(self.g["magic"])
         self.lot = float(self.g["lot"])
-        self.state_path = Path(state_path or ROOT / "state" / "capitulation.json")
-        self.csv_path = Path(csv_path or ROOT / "logs" / "capitulation_trades.csv")
+        self.state_path = Path(state_path or ROOT / "state" / f"{section}.json")
+        self.csv_path = Path(csv_path or ROOT / "logs" / f"{section}_trades.csv")
         self.state: Dict[str, Any] = {"halted": False, "halt_reason": "", "last_bar": 0, "trades": {}, "pending": None,
                                       "armed": False, "locked": False}
         self.realized = 0.0
@@ -198,6 +198,9 @@ class CapitulationAgent(Sweep48Agent):
             self._csv("ARMED", signal_bar_server=bar, A=round(a, self.digits), reason=f"RSI={r:.1f}")
         if buy and float(tick.time) - (bar + 300) <= float(self.g["signal_max_age_seconds"]):
             self._enter(a, bar, tick, r)
+            if self.g.get("lock_after_entry"):     # uma compra por episódio: só rearma com RSI >= add_rsi
+                self.state["locked"] = True
+                self._save()
 
     # ------------------------------------------------------------ loop
     def step(self) -> None:

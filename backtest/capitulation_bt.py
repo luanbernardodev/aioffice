@@ -28,7 +28,8 @@ def live_rsi(m5: pd.DataFrame, m15: pd.DataFrame) -> np.ndarray:
     return out
 
 
-def run(m5, rsi, trig=10.0, add=20.0, sl_a=2.0, t_a=0.5, d_a=0.25, max_n=3, pess=False, mins=240) -> pd.DataFrame:
+def run(m5, rsi, trig=10.0, add=20.0, sl_a=2.0, t_a=0.5, d_a=0.25, max_n=3, pess=False, mins=240,
+        lock_after_entry=False) -> pd.DataFrame:
     o, h, l, c, sp, t = (m5[x].to_numpy() for x in ("open", "high", "low", "close", "spread", "time"))
     atr = ind.atr(m5).to_numpy()
     pos, out, armed, locked, ep = [], [], False, False, 0
@@ -57,6 +58,7 @@ def run(m5, rsi, trig=10.0, add=20.0, sl_a=2.0, t_a=0.5, d_a=0.25, max_n=3, pess
         if buy:
             e = o[j + 1] + sp[j + 1]
             pos.append({"e": e, "sl": e - sl_a * atr[j], "a": atr[j], "t0": t[j + 1], "on": False, "ep": ep})
+            locked = locked or lock_after_entry
     return pd.DataFrame(out)
 
 
@@ -82,6 +84,10 @@ def main():
     for trig in (10.0, 15.0):
         for pess in (False, True):
             show(f"RSI<={trig:.0f} {'pessimista' if pess else 'otimista'}", run(m5, rsi, trig=trig, pess=pess))
+    print("agente RSI20 (1 compra por episodio, rearma com RSI>=30):")
+    for pess in (False, True):
+        show(f"RSI<=20 {'pessimista' if pess else 'otimista'}",
+             run(m5, rsi, trig=20.0, add=30.0, max_n=1, pess=pess, lock_after_entry=True))
 
 
 if __name__ == "__main__":

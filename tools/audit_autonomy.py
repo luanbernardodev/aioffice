@@ -99,6 +99,10 @@ def section_checks(mt5: Any, cfg: Dict[str, Any]) -> None:
     cap.digits, cap.filling_mode = int(si.digits), int(si.filling_mode)
     rq = cap.build_buy(float(t.ask), round(float(t.ask) - 2 * a, int(si.digits)))
     show_check("CAPITULATION BTC MARKET", "CapitulationAgent.build_buy -> mt5.order_send", rq, mt5.order_check(rq), mt5)
+    r20 = CapitulationAgent(mt5, cfg, section="rsi20")
+    r20.digits, r20.filling_mode = int(si.digits), int(si.filling_mode)
+    rq = r20.build_buy(float(t.ask), round(float(t.ask) - 2 * a, int(si.digits)))
+    show_check("RSI20 BTC MARKET", "CapitulationAgent.build_buy (rsi20) -> mt5.order_send", rq, mt5.order_check(rq), mt5)
 
     def equivalent(name: str, symbol: str, magic: int, volume: float, path: str) -> None:
         tk, atr = mt5.symbol_info_tick(symbol), atr_m5(mt5, symbol)
@@ -114,7 +118,7 @@ def section_checks(mt5: Any, cfg: Dict[str, Any]) -> None:
 
 PROCESS_QUERY = r'''
 Get-CimInstance Win32_Process |
-  Where-Object { $_.CommandLine -match 'run_engine|run_sweep48|run_capitulation|start_engine|start_sweep48|start_capitulation|main\.py|terminal64' } |
+  Where-Object { $_.CommandLine -match 'run_engine|run_sweep48|run_capitulation|start_engine|start_sweep48|start_capitulation|start_rsi20|main\.py|terminal64' } |
   ForEach-Object {
     $c = $_.CommandLine -replace '(?i)(--?pass\w*[= ]+)\S+', '$1***'
     '  ' + $_.ProcessId + ' ' + $c.Substring(0, [Math]::Min(110, $c.Length))
@@ -179,7 +183,7 @@ def main() -> None:
         i = mt5.symbol_info(s)
         out(f"  {s}: trade_mode={i.trade_mode} ({TRADE_MODE.get(i.trade_mode)}) | contract_size={i.trade_contract_size} | "
             f"stops_level={i.trade_stops_level} | freeze_level={i.trade_freeze_level} | volume_min={i.volume_min}")
-    magics = {777777: "legado", 20261107: "engine", 20261108: "GoldFlip", 20261109: "BTCTrendFlip", 20261110: "SWEEP48", 20261111: "CAPITULATION"}
+    magics = {777777: "legado", 20261107: "engine", 20261108: "GoldFlip", 20261109: "BTCTrendFlip", 20261110: "SWEEP48", 20261111: "CAPITULATION", 20261112: "RSI20"}
     out("\n[f] Posições/ordens abertas")
     for p in mt5.positions_get() or []:
         out(f"  posição #{p.ticket} {p.symbol} {p.volume} magic={p.magic} ({magics.get(p.magic, 'manual/outro')}) sl={p.sl} tp={p.tp}")

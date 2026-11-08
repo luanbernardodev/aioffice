@@ -171,6 +171,24 @@ capitulation:                    # compra de exaustão em BTCUSD (processo próp
   poll_ms: 50
   signal_max_age_seconds: 60
 
+rsi20:                           # compra em RSI <= 20 no BTCUSD (mesmo código do capitulation)
+  enabled: true
+  symbol: BTCUSD
+  magic: 20261112
+  lot: 0.01
+  trigger_rsi: 20
+  add_rsi: 30                    # só rearma depois que o RSI voltar a 30 ou mais
+  max_entries: 1
+  lock_after_entry: true         # uma compra por episódio
+  sl_atr: 2.0
+  trail_trigger_atr: 0.5
+  trail_dist_atr: 0.25
+  max_minutes: 240
+  loss_limit_usd_per_btc: 1500   # -15 USD com 0.01 lote
+  deviation_points: 500
+  poll_ms: 50
+  signal_max_age_seconds: 60
+
 backtest:
   spread_mult: 1.5               # spread das barras do MT5 é o MÍNIMO da barra -> inflaciona
   bars: 99999                    # máximo do terminal (~17 meses M5 GOLD/US500, ~12 BTC)
