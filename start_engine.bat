@@ -4,6 +4,7 @@ REM Requisitos: MT5 aberto e logado na demo 309673774, botao "Algo Trading" liga
 REM NAO rode o main.py antigo ao mesmo tempo, nem este motor em outra maquina na mesma conta.
 cd /d "%~dp0"
 start "SWEEP48" cmd /c start_sweep48.bat
+start "CAPITULATION" cmd /c start_capitulation.bat
 :loop
 echo [%date% %time%] Iniciando motor (DEMO, DRY_RUN=False)...
 python run_engine.py --live-demo

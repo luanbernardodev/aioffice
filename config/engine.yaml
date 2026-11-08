@@ -154,6 +154,23 @@ sweep48:                         # agente de scalp BTCUSD M5; ocupa a vaga ocios
   poll_ms: 50
   signal_max_age_seconds: 60
 
+capitulation:                    # compra de exaustão em BTCUSD (processo próprio)
+  enabled: true
+  symbol: BTCUSD
+  magic: 20261111
+  lot: 0.01
+  trigger_rsi: 10                # RSI(14) M15, com a barra em formação, avaliado a cada M5 fechada
+  add_rsi: 20                    # enquanto abaixo disso, novas compras até algum stop ficar positivo
+  max_entries: 3
+  sl_atr: 2.0
+  trail_trigger_atr: 0.5
+  trail_dist_atr: 0.25
+  max_minutes: 240
+  loss_limit_usd_per_btc: 3000   # -30 USD com 0.01 lote
+  deviation_points: 500
+  poll_ms: 50
+  signal_max_age_seconds: 60
+
 backtest:
   spread_mult: 1.5               # spread das barras do MT5 é o MÍNIMO da barra -> inflaciona
   bars: 99999                    # máximo do terminal (~17 meses M5 GOLD/US500, ~12 BTC)
