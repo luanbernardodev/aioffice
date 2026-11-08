@@ -137,6 +137,23 @@ btcflip:                         # 7º agente: EA BTCTrendFlip (SuperTrend 10,3 
   min_atr: 0
   max_spread_atr: 0.15           # spread máximo = 0.15 x ATR(H4)
 
+sweep48:                         # agente de scalp BTCUSD M5; ocupa a vaga ociosa do A3_BOS_RETEST no BTC
+  enabled: true
+  symbol: BTCUSD
+  magic: 20261110
+  lot: 0.01
+  start_hour: 15                 # hora de abertura da barra, relógio do servidor XM
+  end_hour: 20                   # inclusive (até 20:59)
+  sl_atr: 3.0
+  tp_atr: 5.0
+  trail_trigger_atr: 0.75
+  trail_dist_atr: 0.15
+  max_minutes: 240
+  loss_limit_usd_per_btc: 1500   # acumulado do magic <= -1500 USD por 1 BTC de exposição
+  deviation_points: 500
+  poll_ms: 50
+  signal_max_age_seconds: 60
+
 backtest:
   spread_mult: 1.5               # spread das barras do MT5 é o MÍNIMO da barra -> inflaciona
   bars: 99999                    # máximo do terminal (~17 meses M5 GOLD/US500, ~12 BTC)
