@@ -17,8 +17,9 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+EXPERTS = ["GoldFlipTrail.mq5", "BTCTrendFlip.mq5"]
 FILES = {ROOT / "mql5" / "Include" / "GoldFlipControl.mqh": ("MQL5", "Include"),
-         ROOT / "mql5" / "Experts" / "GoldFlipTrail.mq5": ("MQL5", "Experts")}
+         **{ROOT / "mql5" / "Experts" / e: ("MQL5", "Experts") for e in EXPERTS}}
 
 
 def main() -> int:
@@ -39,18 +40,25 @@ def main() -> int:
     editor = install / "metaeditor64.exe"
     if not editor.exists():
         editor = install / "MetaEditor64.exe"
-    src = data / "MQL5" / "Experts" / "GoldFlipTrail.mq5"
-    log = Path(tempfile.gettempdir()) / "goldflip_compile.log"
-    subprocess.run([str(editor), f"/compile:{src}", f"/log:{log}"], check=False)
-    text = log.read_bytes().decode("utf-16", errors="ignore") if log.exists() else ""
-    m = re.search(r"Result:\s*(\d+)\s*errors?,\s*(\d+)\s*warnings?", text)
-    ex5 = src.with_suffix(".ex5")
-    if not m or int(m.group(1)) > 0 or not ex5.exists():
-        print("ERRO na compilação:\n" + "\n".join(l for l in text.splitlines() if "error" in l.lower())[-3000:])
+    failed = False
+    for name in EXPERTS:
+        src = data / "MQL5" / "Experts" / name
+        log = Path(tempfile.gettempdir()) / f"{src.stem}_compile.log"
+        subprocess.run([str(editor), f"/compile:{src}", f"/log:{log}"], check=False)
+        text = log.read_bytes().decode("utf-16", errors="ignore") if log.exists() else ""
+        m = re.search(r"Result:\s*(\d+)\s*errors?,\s*(\d+)\s*warnings?", text)
+        ex5 = src.with_suffix(".ex5")
+        if not m or int(m.group(1)) > 0 or not ex5.exists():
+            print(f"ERRO na compilação de {name}:\n" +
+                  "\n".join(l for l in text.splitlines() if "error" in l.lower())[-3000:])
+            failed = True
+            continue
+        print(f"compilado: {ex5}  ({m.group(1)} erros, {m.group(2)} warnings)")
+    if failed:
         return 1
-    print(f"compilado: {ex5}  ({m.group(1)} erros, {m.group(2)} warnings)")
-    print("\nPróximo passo (uma vez só): no MT5 abra um gráfico GOLD M5 e arraste 'GoldFlipTrail' (Navegador > "
-          "Experts) para ele; marque 'Permitir Algo Trading'. O MT5 lembra disso nos próximos reinícios.")
+    print("\nUma vez só, no MT5 (o MT5 lembra nos próximos reinícios), marcando 'Permitir Algo Trading':\n"
+          "  - gráfico GOLD M5   -> arrastar GoldFlipTrail\n"
+          "  - gráfico BTCUSD H4 -> arrastar BTCTrendFlip")
     return 0
 
 

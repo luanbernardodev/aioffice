@@ -19,9 +19,16 @@
 //+------------------------------------------------------------------+
 #property strict
 
+// Outros EAs podem definir estes nomes ANTES do #include (ex.: BTCTrendFlip usa btcflip_*.json)
+#ifndef GF_CONTROL_FILE
 #define GF_CONTROL_FILE "goldflip_control.json"
+#endif
+#ifndef GF_STATUS_FILE
 #define GF_STATUS_FILE  "goldflip_status.json"
+#endif
+#ifndef GF_STATUS_TMP
 #define GF_STATUS_TMP   "goldflip_status.tmp"
+#endif
 
 struct GFControl
   {

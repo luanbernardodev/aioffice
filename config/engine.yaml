@@ -24,7 +24,7 @@ risk:
   account_guard:                 # kill switch diário -> GoldFlip enabled=false + zera até 00:00 UTC
     daily_dd_pct: 3.0            # perda do dia (realizado + flutuante) >= 3% do saldo de início do dia
     scope: agents                # agents = só os magics abaixo (ignora operações manuais) | account = conta inteira
-    magics: [20261107, 20261108] # engine/ e GoldFlip
+    magics: [20261107, 20261108, 20261109] # engine/, GoldFlip e BTCTrendFlip
     check_seconds: 30
 
 regime:
@@ -111,6 +111,31 @@ goldflip:                        # 6º agente: EA GoldFlipTrail (MQL5) supervisi
     lateral: {enabled: false, trail_atr: 0.8}   # flip+trail em lateral = serrote; ajuste se o EA tiver lógica própria p/ range
   min_atr: 1.5                   # ATR(M5) mínimo em USD para operar (mercado morto -> enabled=false)
   max_spread_atr: 0.15           # max_spread (pontos) = 0.15 x ATR(M5) / point
+
+btcflip:                         # 7º agente: EA BTCTrendFlip (SuperTrend 10,3 H4 + EMA200 + trailing 3xATR)
+  enabled: true
+  symbol: BTCUSD
+  magic: 20261109
+  control_file: btcflip_control.json
+  status_file: btcflip_status.json
+  interval_seconds: 300
+  control_ttl_seconds: 900
+  files_dir: auto
+  news_window_minutes: 30        # bloqueia NOVAS entradas ±30 min de CPI/FOMC/NFP
+  news_keywords: ["CPI", "FOMC", "Federal Funds Rate", "Non-Farm"]
+  sessions: []                   # 24/7
+  flatten_outside_session: false
+  flatten_on_news: false         # operação de vários dias: SL na corretora protege; não zera por notícia
+  flatten_on_kill: false         # kill switch só bloqueia novas entradas (zerar mataria a perna de tendência)
+  regime:
+    mode: h4_ema200
+    ema_period: 200
+    atr_period: 14
+  params:
+    trend:   {enabled: true, trail_atr: 3.0}
+    lateral: {enabled: false, trail_atr: 3.0}
+  min_atr: 0
+  max_spread_atr: 0.15           # spread máximo = 0.15 x ATR(H4)
 
 backtest:
   spread_mult: 1.5               # spread das barras do MT5 é o MÍNIMO da barra -> inflaciona

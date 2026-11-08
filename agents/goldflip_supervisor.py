@@ -65,25 +65,41 @@ def classify_regime(m1: pd.DataFrame, m5: pd.DataFrame, rcfg: Dict[str, Any]) ->
             "dist_atr": round(dist, 3), "slope_atr": round(slope, 3)}
 
 
+def classify_regime_h4(h4: pd.DataFrame, rcfg: Dict[str, Any]) -> Dict[str, Any]:
+    """BTC (BTCTrendFlip): direção = lado do preço em relação à EMA200 do H4; ATR(14) do H4."""
+    n = int(rcfg.get("ema_period", 200))
+    if h4 is None or len(h4) < n + 20:
+        return {"regime": "unknown", "direction": 0, "atr": float("nan")}
+    e = h4["close"].ewm(span=n, adjust=False).mean()
+    a = float(ind.atr(h4, int(rcfg.get("atr_period", 14))).iat[-1])
+    c = float(h4["close"].iat[-1])
+    d = 1 if c > float(e.iat[-1]) else (-1 if c < float(e.iat[-1]) else 0)
+    return {"regime": "trend" if d else "lateral", "direction": d, "atr": round(a, 4),
+            "ema200_h4": round(float(e.iat[-1]), 2)}
+
+
 def decide_control(reg: Dict[str, Any], now: datetime, gcfg: Dict[str, Any], point: float,
                    calendar: Optional[NewsCalendar] = None, kill_reason: str = "") -> Dict[str, Any]:
     params = gcfg.get("params", {}).get(reg.get("regime"), {"enabled": False, "trail_atr": 1.0})
-    atr = reg.get("atr_m5")
+    atr = reg.get("atr", reg.get("atr_m5"))
     atr_ok = atr is not None and not (isinstance(atr, float) and np.isnan(atr)) and atr > 0
     enabled = bool(params.get("enabled", False))
     reason = f"regime={reg.get('regime')}"
     flatten = False                      # True = EA zera a posição (fora de sessão, notícia, kill switch)
     min_atr = float(gcfg.get("min_atr", 1.5))
     if kill_reason:
-        enabled, flatten, reason = False, True, f"KILL SWITCH A5: {kill_reason}"
+        enabled, flatten = False, bool(gcfg.get("flatten_on_kill", True))
+        reason = f"KILL SWITCH A5: {kill_reason}"
     elif not in_session(now, gcfg.get("sessions") or []):
-        enabled, flatten, reason = False, True, "fora de sessão Londres/NY"
+        enabled, flatten = False, bool(gcfg.get("flatten_outside_session", True))
+        reason = "fora de sessão Londres/NY"
     elif calendar is not None and calendar.blocking_event(now):
-        enabled, flatten, reason = False, True, f"janela de notícia: {calendar.blocking_event(now)}"
+        enabled, flatten = False, bool(gcfg.get("flatten_on_news", True))
+        reason = f"janela de notícia: {calendar.blocking_event(now)}"
     elif not atr_ok:
         enabled, reason = False, "ATR indisponível"
     elif atr < min_atr:
-        enabled, reason = False, f"ATR(M5) {atr:.2f} < min_atr {min_atr}"
+        enabled, reason = False, f"ATR {atr:.2f} < min_atr {min_atr}"
     elif not enabled:
         reason = f"regime={reg.get('regime')} (desligado por config)"
     max_spread = int(float(gcfg.get("max_spread_atr", 0.15)) * atr / point) if atr_ok and point > 0 else 0
@@ -91,7 +107,8 @@ def decide_control(reg: Dict[str, Any], now: datetime, gcfg: Dict[str, Any], poi
     return {"enabled": enabled, "flatten": flatten, "trail_atr": float(params.get("trail_atr", 1.0)), "min_atr": min_atr,
             "max_spread": max_spread, "regime": reg.get("regime"), "direction": int(reg.get("direction", 0)),
             "atr_m5": float(atr) if atr_ok else 0.0, "reason": reason, "updated_at": ts,
-            "valid_until": ts + int(gcfg.get("control_ttl_seconds", 900)), "source": "quant-office/goldflip_supervisor"}
+            "valid_until": ts + int(gcfg.get("control_ttl_seconds", 900)),
+            "source": f"quant-office/{gcfg.get('name', 'goldflip')}_supervisor"}
 
 
 def write_json_atomic(path: Path, obj: Dict[str, Any], retries: int = 5) -> None:
@@ -123,11 +140,18 @@ def read_json(path: Path) -> Optional[Dict[str, Any]]:
 
 # ----------------------------------------------------------------- agente
 class GoldFlipSupervisor:
+    """Supervisor genérico de EAs "flip" (uma seção do config por EA: goldflip, btcflip...)."""
+
     def __init__(self, mt5: Any, cfg: Dict[str, Any], files_dir: Optional[str] = None,
-                 calendar: Optional[NewsCalendar] = None, guard: Optional[AccountGuard] = None) -> None:
+                 calendar: Optional[NewsCalendar] = None, guard: Optional[AccountGuard] = None,
+                 section: str = "goldflip") -> None:
         self.mt5 = mt5
         self.cfg = cfg
-        self.g = cfg["goldflip"]
+        self.section = section
+        self.tag = section.upper()
+        self.g = dict(cfg[section], name=section)
+        self.control_file = self.g.get("control_file", CONTROL_FILE)
+        self.status_file = self.g.get("status_file", STATUS_FILE)
         self.symbol = self.g.get("symbol", "GOLD")
         self.magic = int(self.g.get("magic", 20261108))
         self.interval = int(self.g.get("interval_seconds", 300))
@@ -154,7 +178,8 @@ class GoldFlipSupervisor:
         self.mt5.symbol_select(self.symbol, True)
         if refresh_calendar:
             self.calendar.start_background_refresh()
-        log.info("[GOLDFLIP] Supervisor ativo | magic=%s | controle em %s", self.magic, self.dir / CONTROL_FILE)
+        log.info("[%s] Supervisor ativo | %s magic=%s | controle em %s", self.tag, self.symbol, self.magic,
+                 self.dir / self.control_file)
 
     # ------------------------------------------------------------ loop
     def tick(self, now: Optional[datetime] = None) -> None:
@@ -168,22 +193,26 @@ class GoldFlipSupervisor:
             self.run_cycle(now)
 
     def _rates(self, tf_name: str, n: int) -> Optional[pd.DataFrame]:
-        tf = {"M1": self.mt5.TIMEFRAME_M1, "M5": self.mt5.TIMEFRAME_M5}[tf_name]
+        tf = getattr(self.mt5, f"TIMEFRAME_{tf_name}")
         r = self.mt5.copy_rates_from_pos(self.symbol, tf, 1, n)
         return pd.DataFrame(r) if r is not None and len(r) else None
 
     def run_cycle(self, now: datetime) -> Dict[str, Any]:
-        reg = classify_regime(self._rates("M1", 300), self._rates("M5", 300), self.g.get("regime", {}))
+        rcfg = self.g.get("regime", {})
+        if rcfg.get("mode") == "h4_ema200":
+            reg = classify_regime_h4(self._rates("H4", 400), rcfg)
+        else:
+            reg = classify_regime(self._rates("M1", 300), self._rates("M5", 300), rcfg)
         si = self.mt5.symbol_info(self.symbol)
         point = float(getattr(si, "point", 0.01) or 0.01)
         ctl = decide_control(reg, now, self.g, point, self.calendar, self.guard.kill_reason)
-        write_json_atomic(self.dir / CONTROL_FILE, ctl)
+        write_json_atomic(self.dir / self.control_file, ctl)
         changed = ctl.get("enabled") != self.control.get("enabled") or ctl.get("regime") != self.control.get("regime")
         self.control = ctl
-        self.status = read_json(self.dir / STATUS_FILE)
+        self.status = read_json(self.dir / self.status_file)
         (log.warning if changed else log.info)(
-            "[GOLDFLIP] enabled=%s flatten=%s regime=%s dir=%+d trail=%.2fxATR min_atr=%.2f max_spread=%dpts ATR=%.2f | %s",
-            ctl["enabled"], ctl["flatten"], ctl["regime"], ctl["direction"], ctl["trail_atr"], ctl["min_atr"], ctl["max_spread"],
+            "[%s] enabled=%s flatten=%s regime=%s dir=%+d trail=%.2fxATR min_atr=%.2f max_spread=%dpts ATR=%.2f | %s",
+            self.tag, ctl["enabled"], ctl["flatten"], ctl["regime"], ctl["direction"], ctl["trail_atr"], ctl["min_atr"], ctl["max_spread"],
             ctl["atr_m5"], ctl["reason"])
         self._log_status()
         return ctl
@@ -191,11 +220,12 @@ class GoldFlipSupervisor:
     def force_disable(self, reason: str, now: datetime) -> None:
         ctl = dict(self.control) if self.control else decide_control({"regime": "unknown"}, now, self.g, 0.01)
         ts = int(now.timestamp())
-        ctl.update({"enabled": False, "flatten": True, "reason": f"KILL SWITCH A5: {reason}", "updated_at": ts,
+        flatten = bool(self.g.get("flatten_on_kill", True))
+        ctl.update({"enabled": False, "flatten": flatten, "reason": f"KILL SWITCH A5: {reason}", "updated_at": ts,
                     "valid_until": ts + int(self.g.get("control_ttl_seconds", 900))})
-        write_json_atomic(self.dir / CONTROL_FILE, ctl)
+        write_json_atomic(self.dir / self.control_file, ctl)
         self.control = ctl
-        log.warning("[GOLDFLIP] FORÇADO enabled=false -> %s", reason)
+        log.warning("[%s] FORÇADO enabled=false flatten=%s -> %s", self.tag, flatten, reason)
 
     # ------------------------------------------------------------ A5: exposição + kill switch
     def _realized_today(self, now: datetime) -> Tuple[float, Dict[int, float]]:
@@ -236,22 +266,22 @@ class GoldFlipSupervisor:
     def _log_status(self) -> None:
         e = self.exposure
         if e:
-            log.info("[A5 EXPOSIÇÃO %s] net=%.2f lotes | bruto=%.2f | PnL flutuante=%.2f | por magic=%s | DD dia=%s%%",
-                     self.symbol, e["net_lots"], e["gross_lots"], e["floating_pnl"],
+            log.info("[%s][A5 EXPOSIÇÃO %s] net=%.2f lotes | bruto=%.2f | PnL flutuante=%.2f | por magic=%s | DD dia=%s%%",
+                     self.tag, self.symbol, e["net_lots"], e["gross_lots"], e["floating_pnl"],
                      {m: round(v["net_lots"], 2) for m, v in e["by_magic"].items()}, self.guard.last.get("dd_pct"))
         s = self.status
         if s is None:
-            log.warning("[GOLDFLIP] %s ainda não existe: o EA está anexado ao gráfico GOLD com a versão nova?",
-                        STATUS_FILE)
+            log.warning("[%s] %s ainda não existe: o EA está anexado ao gráfico %s com a versão nova?",
+                        self.tag, self.status_file, self.symbol)
             return
         age = int(time.time()) - int(s.get("updated_at", 0) or 0)
-        log.info("[GOLDFLIP STATUS] pos=%s %.2f lotes | PnL dia=%.2f | trades/h=%s | spread médio=%s pts | "
-                 "EA vê enabled=%s | atualizado há %ds", s.get("position"), float(s.get("volume", 0) or 0),
+        log.info("[%s STATUS] pos=%s %.2f lotes | PnL dia=%.2f | trades/h=%s | spread médio=%s pts | "
+                 "EA vê enabled=%s | atualizado há %ds", self.tag, s.get("position"), float(s.get("volume", 0) or 0),
                  float(s.get("day_pnl", 0) or 0), s.get("trades_last_hour"), s.get("avg_spread_points"),
                  s.get("control_enabled"), age)
         if age > 180:
-            log.warning("[GOLDFLIP] status do EA parado há %ds (EA desanexado ou Algo Trading desligado?)", age)
+            log.warning("[%s] status do EA parado há %ds (EA desanexado ou Algo Trading desligado?)", self.tag, age)
 
     def summary(self) -> str:
         c = self.control or {}
-        return f"GoldFlip: enabled={c.get('enabled')} {c.get('regime')} ({c.get('reason', '-')})"
+        return f"{self.tag}: enabled={c.get('enabled')} {c.get('regime')} ({c.get('reason', '-')})"

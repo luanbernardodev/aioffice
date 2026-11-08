@@ -81,4 +81,11 @@ python -m tools.deploy_mql5        # copia include + EA para o terminal e compil
 ```
 Uma vez só: gráfico **GOLD M5** -> arrastar **GoldFlipTrail** -> marcar *Permitir Algo Trading*. O MT5 reabre o gráfico com o EA
 nos próximos reinícios. O EA só roda em conta DEMO e recusa duas cópias ao mesmo tempo.
-Nenhum agente fecha posições de outro magic (legado 777777, engine 20261107, GoldFlip 20261108).
+Nenhum agente fecha posições de outro magic (legado 777777, engine 20261107, GoldFlip 20261108, BTCTrendFlip 20261109).
+
+### 7º agente: EA BTCTrendFlip (BTCUSD H4, magic 20261109)
+SuperTrend(10,3) + filtro EMA200, stop inicial 2xATR(14), trailing chandelier 3xATR, virada contrária fecha e inverte.
+Supervisor = mesma classe (`section: btcflip`): 24/7, bloqueia novas entradas ±30 min de CPI/FOMC/NFP e no kill switch,
+sem zerar (operação de vários dias protegida pelo SL na corretora). Pesquisa: `python -m backtest.btc_research`
+(melhor variante com custos+swap: PF ~1.1 no IS e ~1.07 no OOS — praticamente empate; vizinhos 0.81–1.11).
+Uma vez só: gráfico **BTCUSD H4** -> arrastar **BTCTrendFlip** -> *Permitir Algo Trading*.
