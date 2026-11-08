@@ -106,6 +106,16 @@ def section_checks(mt5: Any, cfg: Dict[str, Any]) -> None:
     equivalent("legado ops_* BTC", "BTCUSD", 777777, 0.01, "EQUIVALENTE (MT5Bridge.execute_order; main.py)")
 
 
+PROCESS_QUERY = r'''
+Get-CimInstance Win32_Process |
+  Where-Object { $_.CommandLine -match 'run_engine|run_sweep48|start_engine|start_sweep48|main\.py|terminal64' } |
+  ForEach-Object {
+    $c = $_.CommandLine -replace '(?i)(--?pass\w*[= ]+)\S+', '$1***'
+    '  ' + $_.ProcessId + ' ' + $c.Substring(0, [Math]::Min(110, $c.Length))
+  }
+'''
+
+
 def powershell(cmd: str) -> str:
     r = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, timeout=60)
     return r.stdout.strip()
@@ -113,9 +123,7 @@ def powershell(cmd: str) -> str:
 
 def section_host() -> None:
     out("\n[e] Processos e reinício")
-    out(powershell("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "
-                   "'run_engine|run_sweep48|start_engine|start_sweep48|main\\.py|terminal64' } | "
-                   "ForEach-Object { $c = $_.CommandLine -replace '(?i)(--?pass\w*[= ]+)\S+','$1***'; "  $($_.ProcessId) " + $c.Substring(0,[Math]::Min(110,$c.Length)) }"))
+    out(powershell(PROCESS_QUERY))
     startup = Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Startup"
     out(f"  Pasta Inicializar: {sorted(p.name for p in startup.glob('*'))}")
     try:
