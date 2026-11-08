@@ -19,6 +19,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -78,6 +79,11 @@ def classify_regime_h4(h4: pd.DataFrame, rcfg: Dict[str, Any]) -> Dict[str, Any]
             "ema200_h4": round(float(e.iat[-1]), 2)}
 
 
+def in_night_window(now: datetime, sessions: Any) -> bool:
+    """Fora das sessões Londres/NY, de segunda a sexta no relógio de Nova York (domingo à noite fica de fora)."""
+    return now.astimezone(ZoneInfo("America/New_York")).weekday() < 5 and not in_session(now, sessions)
+
+
 def decide_control(reg: Dict[str, Any], now: datetime, gcfg: Dict[str, Any], point: float,
                    calendar: Optional[NewsCalendar] = None, kill_reason: str = "") -> Dict[str, Any]:
     params = gcfg.get("params", {}).get(reg.get("regime"), {"enabled": False, "trail_atr": 1.0})
@@ -90,9 +96,9 @@ def decide_control(reg: Dict[str, Any], now: datetime, gcfg: Dict[str, Any], poi
     if kill_reason:
         enabled, flatten = False, bool(gcfg.get("flatten_on_kill", True))
         reason = f"KILL SWITCH A5: {kill_reason}"
-    elif not in_session(now, gcfg.get("sessions") or []):
+    elif not (in_night_window if gcfg.get("night_window") else in_session)(now, gcfg.get("sessions") or []):
         enabled, flatten = False, bool(gcfg.get("flatten_outside_session", True))
-        reason = "fora de sessão Londres/NY"
+        reason = "fora da janela da madrugada" if gcfg.get("night_window") else "fora de sessão Londres/NY"
     elif calendar is not None and calendar.blocking_event(now):
         enabled, flatten = False, bool(gcfg.get("flatten_on_news", True))
         reason = f"janela de notícia: {calendar.blocking_event(now)}"
@@ -166,6 +172,10 @@ class GoldFlipSupervisor:
         self.control: Dict[str, Any] = {}
         self.status: Optional[Dict[str, Any]] = None
         self.exposure: Dict[str, Any] = {}
+        self.use_guard = bool(self.g.get("use_kill_switch", True))
+        self.loss_limit = float(self.g.get("loss_limit_usd", 0.0))
+        self.halt_file = ROOT / "state" / f"{section}_halt.json"
+        self.halt_reason = str((read_json(self.halt_file) or {}).get("reason", ""))
 
     def _resolve_dir(self) -> Path:
         d = self.g.get("files_dir", "auto")
@@ -205,7 +215,7 @@ class GoldFlipSupervisor:
             reg = classify_regime(self._rates("M1", 300), self._rates("M5", 300), rcfg)
         si = self.mt5.symbol_info(self.symbol)
         point = float(getattr(si, "point", 0.01) or 0.01)
-        ctl = decide_control(reg, now, self.g, point, self.calendar, self.guard.kill_reason)
+        ctl = decide_control(reg, now, self.g, point, self.calendar, self.halt_reason or self.guard.kill_reason)
         write_json_atomic(self.dir / self.control_file, ctl)
         changed = ctl.get("enabled") != self.control.get("enabled") or ctl.get("regime") != self.control.get("regime")
         self.control = ctl
@@ -243,12 +253,29 @@ class GoldFlipSupervisor:
                 by_magic[int(d.magic)] = by_magic.get(int(d.magic), 0.0) + v
         return total, by_magic
 
+    def _check_own_limit(self, positions: Any, now: datetime) -> None:
+        """Limite de perda acumulada só deste magic (realizado + flutuante). Fica gravado: não volta sozinho."""
+        if self.halt_reason:
+            return
+        deals = self.mt5.history_deals_get(datetime(2020, 1, 1), now.replace(tzinfo=None) + timedelta(days=2)) or []
+        total = sum(float(d.profit) + float(d.swap) + float(d.commission) for d in deals
+                    if int(d.magic) == self.magic and int(d.type) in (0, 1))
+        total += sum(float(p.profit) + float(getattr(p, "swap", 0.0)) for p in positions if int(p.magic) == self.magic)
+        if total <= -self.loss_limit:
+            self.halt_reason = f"limite de perda do agente: {total:.2f} <= -{self.loss_limit:.2f} USD"
+            write_json_atomic(self.halt_file, {"reason": self.halt_reason})
+            self.force_disable(self.halt_reason, now)
+
     def check_risk(self, now: datetime) -> None:
         info = self.mt5.account_info()
         if info is None:
             return
         positions = self.mt5.positions_get() or []
         self.exposure = AccountGuard.exposure(positions, self.symbol)     # exposição GOLD de TODOS os magics
+        if self.loss_limit > 0:
+            self._check_own_limit(positions, now)
+        if not self.use_guard:
+            return
         realized_all, realized_by_magic = self._realized_today(now)
         start = float(info.balance) - realized_all
         if self.guard.scope == "account":

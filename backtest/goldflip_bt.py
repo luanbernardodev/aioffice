@@ -16,6 +16,7 @@ Lote fixo 0.01 => US$1 por US$1 de movimento no ouro.
 from __future__ import annotations
 
 import itertools
+import sys
 from typing import Dict, List
 
 import numpy as np
@@ -35,6 +36,9 @@ def session_mask(t: pd.Series) -> np.ndarray:
     nhm = ny.dt.hour * 60 + ny.dt.minute
     wk = lon.dt.weekday < 5
     return (wk & (((lhm >= 7 * 60) & (lhm < 16 * 60 + 30)) | ((nhm >= 8 * 60) & (nhm < 17 * 60)))).to_numpy()
+
+
+SESSION_LONDON_NY = session_mask
 
 
 def gate(df: pd.DataFrame, bar_minutes: int, min_atr: float = 1.5) -> Dict[str, np.ndarray]:
@@ -140,7 +144,26 @@ def report(tr: pd.DataFrame, cut: pd.Timestamp = OOS_START) -> str:
     return " | ".join(out)
 
 
+def night_mask(t: pd.Series) -> np.ndarray:
+    """Janela do GoldNightFlip: fora de Londres/NY, seg-sex no relógio de Nova York."""
+    return ~SESSION_LONDON_NY(t) & (t.dt.tz_convert("America/New_York").dt.weekday.to_numpy() < 5)
+
+
+def main_night() -> None:
+    global session_mask
+    session_mask = night_mask
+    for tf, mins, cut in (("M5", 5, pd.Timestamp("2026-02-01", tz="UTC")), ("M15", 15, OOS_START)):
+        df = load_tf("GOLD", tf)
+        g = gate(df, mins)
+        print(f"GOLD {tf} madrugada, barras habilitadas {100 * g['enabled'].mean():.1f}%")
+        for k in (1.0, 1.5, 2.0, 3.0):
+            print(f"  B trail={k:.1f}xATR -> {report(simulate(df, g, k, 'B', False), cut)}")
+
+
 def main() -> None:
+    if "--night" in sys.argv:
+        main_night()
+        return
     # M5 só tem ~17 meses: corte em 2026-02-01 (~60/40); M15 (4 anos): corte em 2025-01-01
     for tf, mins, cut in (("M5", 5, pd.Timestamp("2026-02-01", tz="UTC")), ("M15", 15, OOS_START)):
         df = load_tf("GOLD", tf)

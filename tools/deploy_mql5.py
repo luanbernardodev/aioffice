@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-EXPERTS = ["GoldFlipTrail.mq5", "BTCTrendFlip.mq5"]
+EXPERTS = ["GoldFlipTrail.mq5", "BTCTrendFlip.mq5", "GoldNightFlip.mq5"]
 FILES = {ROOT / "mql5" / "Include" / "GoldFlipControl.mqh": ("MQL5", "Include"),
          **{ROOT / "mql5" / "Experts" / e: ("MQL5", "Experts") for e in EXPERTS}}
 
@@ -58,7 +58,8 @@ def main() -> int:
         return 1
     print("\nUma vez só, no MT5 (o MT5 lembra nos próximos reinícios), marcando 'Permitir Algo Trading':\n"
           "  - gráfico GOLD M5   -> arrastar GoldFlipTrail\n"
-          "  - gráfico BTCUSD H4 -> arrastar BTCTrendFlip")
+          "  - gráfico BTCUSD H4 -> arrastar BTCTrendFlip\n"
+          "  - SEGUNDO gráfico GOLD M5 -> arrastar GoldNightFlip")
     return 0
 
 

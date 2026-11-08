@@ -112,6 +112,7 @@ def section_checks(mt5: Any, cfg: Dict[str, Any]) -> None:
         show_check(name, path, rq, mt5.order_check(rq), mt5)
 
     equivalent("GoldFlipTrail GOLD", "GOLD", int(cfg["goldflip"]["magic"]), 0.01, "EQUIVALENTE (no EA: CTrade -> OrderSend)")
+    equivalent("GoldNightFlip GOLD", "GOLD", int(cfg["goldnight"]["magic"]), 0.01, "EQUIVALENTE (no EA: CTrade -> OrderSend)")
     equivalent("BTCTrendFlip BTC", "BTCUSD", int(cfg["btcflip"]["magic"]), 0.01, "EQUIVALENTE (no EA: CTrade -> OrderSend)")
     equivalent("legado ops_* BTC", "BTCUSD", 777777, 0.01, "EQUIVALENTE (MT5Bridge.execute_order; main.py)")
 
@@ -183,7 +184,7 @@ def main() -> None:
         i = mt5.symbol_info(s)
         out(f"  {s}: trade_mode={i.trade_mode} ({TRADE_MODE.get(i.trade_mode)}) | contract_size={i.trade_contract_size} | "
             f"stops_level={i.trade_stops_level} | freeze_level={i.trade_freeze_level} | volume_min={i.volume_min}")
-    magics = {777777: "legado", 20261107: "engine", 20261108: "GoldFlip", 20261109: "BTCTrendFlip", 20261110: "SWEEP48", 20261111: "CAPITULATION", 20261112: "RSI20"}
+    magics = {777777: "legado", 20261107: "engine", 20261108: "GoldFlip", 20261109: "BTCTrendFlip", 20261110: "SWEEP48", 20261111: "CAPITULATION", 20261112: "RSI20", 20261113: "GoldNightFlip"}
     out("\n[f] Posições/ordens abertas")
     for p in mt5.positions_get() or []:
         out(f"  posição #{p.ticket} {p.symbol} {p.volume} magic={p.magic} ({magics.get(p.magic, 'manual/outro')}) sl={p.sl} tp={p.tp}")
