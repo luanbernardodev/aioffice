@@ -89,3 +89,26 @@ Supervisor = mesma classe (`section: btcflip`): 24/7, bloqueia novas entradas ±
 sem zerar (operação de vários dias protegida pelo SL na corretora). Pesquisa: `python -m backtest.btc_research`
 (melhor variante com custos+swap: PF ~1.1 no IS e ~1.07 no OOS — praticamente empate; vizinhos 0.81–1.11).
 Uma vez só: gráfico **BTCUSD H4** -> arrastar **BTCTrendFlip** -> *Permitir Algo Trading*.
+
+## 🛡 Auditor MT5 (somente leitura)
+`agents/auditor_mt5.py` lê saldo, equity, margem, posições e os trades fechados nas últimas `HORAS` (padrão 24),
+calcula trades, profit factor e PnL por símbolo e por agente (magic → nome vem do `config/engine.yaml`) e envia um
+relatório ao Telegram. Só chama o Claude (`claude-haiku-5-5`, 600 tokens) quando há trades na janela ou posição sem SL;
+a "LIÇÃO" de cada análise é guardada em `logs/memoria_auditor.md` (fora do git) e reaproveitada nas próximas.
+Não abre, fecha nem modifica ordens. Usa a mesma conexão do motor (`engine/live.py:_connect`), sem caminho fixo do terminal.
+
+Setup na VPS (uma vez; os valores ficam só nas variáveis de ambiente do usuário, nunca no repositório):
+```
+setx ANTHROPIC_API_KEY "<sua chave>"
+setx TG_TOKEN "<token do bot>"
+setx TG_CHAT_ID "<id do chat>"
+```
+Feche e reabra o terminal (ou faça logoff/logon) para as variáveis valerem. Teste manual:
+```
+start_auditor.bat --horas 24
+```
+Agendamento a cada 4 horas, na sessão interativa (necessário para falar com o MT5 aberto):
+```
+schtasks /create /tn "AuditorMT5" /sc hourly /mo 4 /it /tr "C:\Users\Administrator\Desktop\aioffice\start_auditor.bat"
+```
+Log: `logs/auditor.log`. Se o MT5 não responder, o auditor envia um alerta CRÍTICO ao Telegram.
