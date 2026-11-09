@@ -175,9 +175,17 @@ def save_lesson(lesson: str, now: datetime, path: Optional[Path] = None) -> None
         fh.write(f"- {now:%Y-%m-%d %H:%M} UTC: {lesson}\n")
 
 
+def make_client() -> Any:
+    """Lê ANTHROPIC_API_KEY do ambiente. Chave não vinculada a um workspace exige o cabeçalho
+    anthropic-workspace-id: vem de ANTHROPIC_WORKSPACE_ID, como no restante do projeto (config/settings.py)."""
+    import anthropic
+    ws = os.getenv("ANTHROPIC_WORKSPACE_ID", "").strip()
+    return anthropic.Anthropic(default_headers={"anthropic-workspace-id": ws} if ws else None)
+
+
 def ask_claude(data: Dict[str, Any], memory: str, client: Any = None) -> str:
     import anthropic
-    client = client or anthropic.Anthropic()                 # lê ANTHROPIC_API_KEY do ambiente
+    client = client or make_client()
     payload = json.dumps({"dados": data, "memoria_recente": memory}, ensure_ascii=False, default=str)
     resp = client.messages.create(
         model=MODEL,

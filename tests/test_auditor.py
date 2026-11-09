@@ -131,3 +131,11 @@ def test_extract_lesson():
     assert aud.extract_lesson("LIÇÃO: x y") == "x y"
     assert aud.extract_lesson("**LIÇÃO:** Nenhuma.") is None
     assert aud.extract_lesson("sem formato") is None
+
+
+def test_workspace_header_from_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_teste")
+    assert aud.make_client().default_headers.get("anthropic-workspace-id") == "wrkspc_teste"
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID")
+    assert "anthropic-workspace-id" not in aud.make_client().default_headers

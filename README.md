@@ -102,6 +102,7 @@ Setup na VPS (uma vez; os valores ficam só nas variáveis de ambiente do usuár
 setx ANTHROPIC_API_KEY "<sua chave>"
 setx TG_TOKEN "<token do bot>"
 setx TG_CHAT_ID "<id do chat>"
+setx ANTHROPIC_WORKSPACE_ID "<wrkspc_...>"   # só se a chave não for de um workspace
 ```
 Feche e reabra o terminal (ou faça logoff/logon) para as variáveis valerem. Teste manual:
 ```
