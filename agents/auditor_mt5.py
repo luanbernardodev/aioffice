@@ -41,7 +41,11 @@ SYSTEM_PROMPT = (
     "PROBLEMAS: itens curtos (posição sem SL, drawdown, agente perdedor, overtrading) ou 'nenhum'\n"
     "AÇÃO: uma recomendação objetiva\n"
     "LIÇÃO: uma linha com algo novo que valha lembrar nas próximas auditorias, ou 'nenhuma'\n"
-    "Use só os números recebidos; não invente dados. CRÍTICO = posição sem SL ou perda relevante da conta."
+    "Use só os números recebidos; não invente dados. CRÍTICO = posição sem SL ou perda relevante da conta.
+"
+    "Contexto do sistema: os agentes goldflip, goldnight, btcflip, capitulation e rsi20 saem por stop móvel e "
+    "operam SEM take profit por design, então TP = 0 neles não é problema; SL = 0 é sempre problema. "
+    "Com menos de 20 trades de um agente, trate o resultado como amostra pequena, não como conclusão."
 )
 
 
