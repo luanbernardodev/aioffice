@@ -6,6 +6,7 @@ cd /d "%~dp0"
 start "SWEEP48" cmd /c start_sweep48.bat
 start "CAPITULATION" cmd /c start_capitulation.bat
 start "RSI20" cmd /c start_rsi20.bat
+start "AGENTE_RSI7_H1" cmd /c start_agente_rsi7_h1.bat
 :loop
 echo [%date% %time%] Iniciando motor (DEMO, DRY_RUN=False)...
 python run_engine.py --live-demo

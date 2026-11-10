@@ -238,3 +238,33 @@ def test_adopts_existing_position_after_restart(tmp_path, cfg):
 def test_auditor_maps_new_magic(cfg):
     names = aud.agent_names(cfg)
     assert names[20261114] == "agente_rsi7_h1" and names[20261113] == "goldnight"
+
+
+def test_auditor_report_includes_new_agent_trades_and_positions(cfg):
+    from datetime import datetime, timezone
+    import calendar
+    srv = lambda h, m=0: calendar.timegm((2026, 11, 9, h, m, 0))
+    deal = lambda pos, entry, typ, profit, t: types.SimpleNamespace(
+        position_id=pos, entry=entry, type=typ, magic=20261114, profit=profit, swap=-0.32, commission=0.0, time=t,
+        symbol="BTCUSD", comment="RSI7_H1")
+    deals = [deal(10, 0, 0, 0.0, srv(10)), deal(10, 1, 1, 7.50, srv(14)),
+             deal(11, 0, 1, 0.0, srv(15)), deal(11, 1, 0, -5.80, srv(17))]
+    pos = types.SimpleNamespace(ticket=12, symbol="BTCUSD", type=0, volume=0.01, price_open=74000.0, sl=73400.0,
+                                tp=0.0, profit=1.2, swap=0.0, magic=20261114, comment="RSI7_H1")
+
+    class MT5:
+        def account_info(self):
+            return types.SimpleNamespace(login=309673774, trade_mode=0, balance=137.64, equity=138.84, margin_free=130.0)
+
+        def positions_get(self):
+            return [pos]
+
+        def history_deals_get(self, *a):
+            return deals
+
+    now = datetime(2026, 11, 9, 22, 0, tzinfo=timezone.utc)
+    data = aud.collect(MT5(), 24, aud.agent_names(cfg), "ny_plus_7", now)
+    s = data["resumo"]["por_agente"]["agente_rsi7_h1"]
+    assert s["trades"] == 2 and s["pnl"] == pytest.approx(7.50 - 5.80 - 4 * 0.32)
+    assert data["posicoes"][0]["agente"] == "agente_rsi7_h1" and not data["posicoes"][0]["sem_sl"]
+    assert "agente_rsi7_h1" in aud.local_report(data)
