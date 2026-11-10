@@ -110,5 +110,4 @@ def stop_hit(side: int, bid: float, ask: float, stop: float) -> bool:
 
 
 def daily_loss_hit(day_pnl: float, start_balance: float, max_pct: float) -> bool:
-    """max_pct <= 0 = trava desligada."""
-    return max_pct > 0 and start_balance > 0 and day_pnl <= -max_pct / 100 * start_balance
+    return start_balance > 0 and day_pnl <= -abs(max_pct) / 100 * start_balance

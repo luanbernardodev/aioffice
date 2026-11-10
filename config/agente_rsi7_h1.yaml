@@ -1,7 +1,6 @@
 # Agente RSI7_H1 — BTCUSD H1, pullback por RSI a favor da média + stop móvel ATR, sem TP.
 # Arquivo próprio: não altera config/engine.yaml (de lá só se lê a seção account para a trava de conta DEMO).
-# Limites de risco (1 posição, só DEMO) ficam FIXOS no código, não aqui. A trava de perda diária está
-# desligada (DAILY_LOSS_PCT = 0 em agents/rsi7_h1.py) para a demo seguir a estratégia como no backtest.
+# Limites de risco (1 posição, perda diária 2% do saldo, só DEMO) ficam FIXOS no código, não aqui.
 
 agente_rsi7_h1:
   name: agente_rsi7_h1

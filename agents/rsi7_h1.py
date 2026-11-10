@@ -6,11 +6,9 @@ A cada H1 fechada:
   * sem posição: RSI(n) cruza acima de lo com close > MA -> BUY; cruza abaixo de 100-lo com close < MA -> SELL,
     a mercado (= open da barra seguinte do backtest), SL inicial sl_atr x ATR, TP opcional.
 
-Limites FIXOS no código (não configuráveis): máx. 1 posição; só conta DEMO; kill switch pelo arquivo
-state/KILL_AGENTE_RSI7_H1 ou kill_switch: true no YAML (zera e não abre novas).
-Trava de perda diária DESLIGADA (DAILY_LOSS_PCT = 0) desde 2026-11-10: com saldo demo ~US$137, 2% (~US$2,75) era
-menor que um stop de 1xATR H1 (~US$5,8 com 0.01 lote) e cortava os perdedores antes do SL, fugindo do backtest.
-Para religar, ponha um valor > 0 (perda do dia deste magic, realizada + flutuante, em % do saldo do início do dia).
+Limites FIXOS no código (não configuráveis): máx. 1 posição; perda do dia (UTC) deste magic, realizada +
+flutuante, >= 2% do saldo do início do dia -> zera e bloqueia até o dia seguinte; só conta DEMO; kill switch
+pelo arquivo state/KILL_AGENTE_RSI7_H1 ou kill_switch: true no YAML (zera e não abre novas).
 """
 from __future__ import annotations
 
@@ -34,7 +32,7 @@ log = logging.getLogger("agents.rsi7_h1")
 
 # ----------------------------------------------------------------- limites fixos
 MAX_POSITIONS = 1
-DAILY_LOSS_PCT = 0.0             # 0 = trava de perda diária desligada (ver docstring)
+DAILY_LOSS_PCT = 2.0
 DEMO_ONLY = True
 H1 = 3600
 
@@ -120,12 +118,11 @@ class Rsi7H1Agent:
         self._load()
         self._roll_day(force_read=True)
         log.info("%s %s magic=%s lote=%s contract=%s | RSI(%s) %s/%s + %s%s | SL %sxATR trail %sxATR ativ %sR BE %sR "
-                 "TP %sxATR | máx %d posição, perda diária %s (saldo início do dia %.2f), só DEMO", TAG,
+                 "TP %sxATR | máx %d posição, perda diária %.1f%% (saldo início do dia %.2f), só DEMO", TAG,
                  self.symbol, self.magic, self.lot, self.contract, self.p["rsi_period"], self.p["rsi_level"],
                  100 - float(self.p["rsi_level"]), self.p["ma_type"].upper(), self.p["ma_period"], self.p["sl_atr"],
                  self.p["trail_atr"], self.p["trail_activate_r"], self.p["breakeven_r"], self.p["tp_atr"],
-                 MAX_POSITIONS, f"{DAILY_LOSS_PCT:.1f}%" if DAILY_LOSS_PCT > 0 else "DESLIGADA",
-                 self.state["day_start_balance"])
+                 MAX_POSITIONS, DAILY_LOSS_PCT, self.state["day_start_balance"])
         for pos in self._positions():
             if str(pos.ticket) not in self.state["trades"]:
                 self._adopt(pos)
