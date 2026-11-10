@@ -203,12 +203,25 @@ def test_kill_file_closes_and_blocks(tmp_path, cfg):
     assert fake.positions == []                                  # com kill ativo não reabre
 
 
-def test_daily_loss_flattens_and_blocks_new_entries(tmp_path, cfg):
+def test_daily_loss_lock_is_off_by_default(tmp_path, cfg):
+    assert DAILY_LOSS_PCT == 0 and not R.daily_loss_hit(-1e9, 100.0, DAILY_LOSS_PCT)
+    fake = FakeMT5(bars_ending_in_signal(R.BUY), balance=137.64)
+    ag = make_agent(tmp_path, cfg, fake)
+    ag.start()
+    ag.step()
+    fake.positions[0].profit = -50.0                             # muito além de 2%: só o SL decide a saída
+    ag.step()
+    assert len(fake.positions) == 1 and ag.state["blocked_day"] == ""
+
+
+def test_daily_loss_flattens_and_blocks_when_reenabled(tmp_path, cfg, monkeypatch):
+    import agents.rsi7_h1 as mod
+    monkeypatch.setattr(mod, "DAILY_LOSS_PCT", 2.0)
     fake = FakeMT5(bars_ending_in_signal(R.BUY), balance=1000.0)
     ag = make_agent(tmp_path, cfg, fake)
     ag.start()
     ag.step()
-    fake.positions[0].profit = -(DAILY_LOSS_PCT / 100 * 1000.0) - 0.01
+    fake.positions[0].profit = -(2.0 / 100 * 1000.0) - 0.01
     ag.step()
     assert fake.positions == [] and ag.state["blocked_day"] == ag._today()
     ag.last_head, ag.state["last_bar"] = 0, 0
