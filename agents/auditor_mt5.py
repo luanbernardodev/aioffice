@@ -42,7 +42,8 @@ SYSTEM_PROMPT = (
     "AÇÃO: uma recomendação objetiva\n"
     "LIÇÃO: uma linha com algo novo que valha lembrar nas próximas auditorias, ou 'nenhuma'\n"
     "Use só os números recebidos; não invente dados. CRÍTICO = posição sem SL ou perda relevante da conta.\n"
-    "Contexto do sistema: os agentes goldflip, goldnight, btcflip, capitulation e rsi20 saem por stop móvel e "
+    "Contexto do sistema: os agentes goldflip, goldnight, btcflip, capitulation, rsi20 e agente_rsi7_h1 saem por "
+    "stop móvel e "
     "operam SEM take profit por design, então TP = 0 neles não é problema; SL = 0 é sempre problema. "
     "Com menos de 20 trades de um agente, trate o resultado como amostra pequena, não como conclusão."
 )
@@ -69,7 +70,24 @@ def agent_names(cfg: Dict[str, Any]) -> Dict[int, str]:
     for section, value in cfg.items():
         if isinstance(value, dict) and "magic" in value and section != "account":
             names[int(value["magic"])] = section
+    names.update(standalone_agent_names())
     return names
+
+
+def standalone_agent_names(config_dir: Optional[Path] = None) -> Dict[int, str]:
+    """Agentes com YAML próprio (config/agente_*.yaml, ex.: agente_rsi7_h1 magic 20261114)."""
+    import yaml
+    out: Dict[int, str] = {}
+    for path in sorted((config_dir or ROOT / "config").glob("agente_*.yaml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            log.warning("config %s ilegível: %s", path.name, exc)
+            continue
+        for section, value in data.items():
+            if isinstance(value, dict) and "magic" in value:
+                out[int(value["magic"])] = str(value.get("name") or section)
+    return out
 
 
 def agent_of(magic: int, entry_comment: str, names: Dict[int, str]) -> str:

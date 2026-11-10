@@ -1,0 +1,63 @@
+{
+  "gerado_em": "2026-11-10T21:55:02.723482+00:00",
+  "symbol_info": {
+    "point": 0.01,
+    "digits": 2,
+    "trade_contract_size": 1.0,
+    "swap_mode": 1,
+    "swap_long": -3220.34,
+    "swap_short": -2146.89,
+    "swap_rollover3days": 7,
+    "volume_min": 0.01,
+    "trade_tick_value": 0.01,
+    "trade_tick_size": 0.01,
+    "source": "mt5.symbol_info",
+    "read_at": "2026-11-10T21:52:18.288245+00:00"
+  },
+  "swap_por_rollover_preco": {
+    "long": -32.2034,
+    "short": -21.468899999999998
+  },
+  "combinacoes_novas": 6290176,
+  "repetidas_excluidas": 1280,
+  "por_tf": {
+    "H1": 2097152,
+    "H2": 2097152,
+    "H4": 2097152
+  },
+  "com_40_trades": 1925337,
+  "pre_aprovadas_brutas": 49047,
+  "aprovadas_brutas": 12692,
+  "pre_aprovadas_unicas": 22905,
+  "aprovadas_unicas": 5109,
+  "falhas": {
+    "ok_neighbors": 49,
+    "ok_share": 17049,
+    "ok_stress": 227,
+    "ok_wf": 5801
+  },
+  "walk_forward_processo": [
+    {
+      "janela": "2026-03..2026-06",
+      "candidatas_treino": 2102,
+      "top10_pf_teste_agregado": 0.8846641808732705,
+      "top10_net_teste_pts": -4728.3056640625,
+      "top10_positivas": 0
+    },
+    {
+      "janela": "2026-06..2026-09",
+      "candidatas_treino": 2035,
+      "top10_pf_teste_agregado": 0.4023703959074869,
+      "top10_net_teste_pts": -23869.626953125,
+      "top10_positivas": 0
+    },
+    {
+      "janela": "2026-09..2026-12",
+      "candidatas_treino": 1943,
+      "top10_pf_teste_agregado": 8.522405920672474,
+      "top10_net_teste_pts": 81646.34448242188,
+      "top10_positivas": 10
+    }
+  ],
+  "segundos": 164
+}

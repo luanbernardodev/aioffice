@@ -1,0 +1,14 @@
+{
+  "point": 0.01,
+  "digits": 2,
+  "trade_contract_size": 1.0,
+  "swap_mode": 1,
+  "swap_long": -3220.34,
+  "swap_short": -2146.89,
+  "swap_rollover3days": 7,
+  "volume_min": 0.01,
+  "trade_tick_value": 0.01,
+  "trade_tick_size": 0.01,
+  "source": "mt5.symbol_info",
+  "read_at": "2026-11-10T21:55:04.721828+00:00"
+}

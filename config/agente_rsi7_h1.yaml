@@ -1,0 +1,45 @@
+# Agente RSI7_H1 — BTCUSD H1, pullback por RSI a favor da média + stop móvel ATR, sem TP.
+# Arquivo próprio: não altera config/engine.yaml (de lá só se lê a seção account para a trava de conta DEMO).
+# Limites de risco (1 posição, perda diária 2% do saldo, só DEMO) ficam FIXOS no código, não aqui.
+
+agente_rsi7_h1:
+  name: agente_rsi7_h1
+  enabled: true
+  kill_switch: false             # true = zera a posição e não abre novas (relido a cada 60 s)
+                                 # alternativa sem editar: criar o arquivo state/KILL_AGENTE_RSI7_H1
+  symbol: BTCUSD
+  magic: 20261114
+  lot: 0.01
+  timeframe: H1
+
+  # Estratégia nº 1 aprovada na Fase 1 (backtest/claude_code/ranking_fase1.csv, rank 1):
+  # 56 trades, PF 3.19 (IS 3.09 / OOS 3.42), PF 3.10 com spread x1.5 + slippage, DD US$38 com 0.01 lote, swap incluso.
+  strategy:
+    rsi_period: 7
+    rsi_level: 30                # BUY quando RSI cruza acima de 30 com close > MA; SELL quando cruza abaixo de 70 com close < MA
+    ma_type: ema
+    ma_period: 50
+    atr_period: 14
+    sl_atr: 1.0                  # SL inicial = 1.0 x ATR(14) da barra do sinal
+    trail_atr: 3.0               # trailing 3 x ATR(14) a partir do extremo, atualizado a cada fechamento de H1, só aperta
+    trail_activate_r: 0.0        # 0 = trailing desde a entrada
+    breakeven_r: 0.0             # 0 = sem breakeven
+    tp_atr: 0.0                  # 0 = sem TP
+
+  # Estratégia de referência (fallback): para usar, troque o bloco strategy acima por este.
+  # strategy:
+  #   rsi_period: 7
+  #   rsi_level: 25
+  #   ma_type: sma
+  #   ma_period: 100
+  #   atr_period: 14
+  #   sl_atr: 1.5
+  #   trail_atr: 3.0
+  #   trail_activate_r: 0.0
+  #   breakeven_r: 0.0
+  #   tp_atr: 0.0
+
+  bars: 1500                     # H1 fechadas usadas nos indicadores (EMA/RSI de Wilder convergem bem antes)
+  signal_max_age_seconds: 300    # sinal de barra fechada há mais que isso (reinício tardio) é ignorado
+  deviation_points: 500
+  poll_seconds: 1.0
