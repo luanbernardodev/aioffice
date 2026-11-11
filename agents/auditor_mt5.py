@@ -42,8 +42,8 @@ SYSTEM_PROMPT = (
     "AÇÃO: uma recomendação objetiva\n"
     "LIÇÃO: uma linha com algo novo que valha lembrar nas próximas auditorias, ou 'nenhuma'\n"
     "Use só os números recebidos; não invente dados. CRÍTICO = posição sem SL ou perda relevante da conta.\n"
-    "Contexto do sistema: os agentes goldflip, goldnight, btcflip, capitulation, rsi20 e agente_rsi7_h1 saem por "
-    "stop móvel e "
+    "Contexto do sistema: os agentes goldflip, goldnight, btcflip, capitulation, rsi20, agente_rsi7_h1 e "
+    "us100_rsi2_h1 saem por stop móvel (o us100_rsi2_h1 também por sinal de RSI) e "
     "operam SEM take profit por design, então TP = 0 neles não é problema; SL = 0 é sempre problema. "
     "Com menos de 20 trades de um agente, trate o resultado como amostra pequena, não como conclusão."
 )

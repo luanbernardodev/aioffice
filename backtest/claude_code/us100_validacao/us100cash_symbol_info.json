@@ -1,0 +1,16 @@
+{
+  "point": 0.01,
+  "digits": 2,
+  "trade_contract_size": 1.0,
+  "trade_tick_value": 0.01,
+  "trade_tick_size": 0.01,
+  "swap_mode": 3,
+  "swap_long": -4.83,
+  "swap_short": 0.65,
+  "swap_rollover3days": 5,
+  "volume_min": 0.1,
+  "volume_step": 0.1,
+  "spread": 290,
+  "currency_profit": "USD",
+  "read_at": "2026-11-11T00:25:52.549776+00:00"
+}

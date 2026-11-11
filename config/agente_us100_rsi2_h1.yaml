@@ -1,0 +1,35 @@
+# Agente US100_RSI2_H1 — US100Cash H1, RSI(2) Connors, SOMENTE COMPRA, saída por RSI(5) e stop móvel ATR, sem TP.
+# Arquivo próprio: não altera config/engine.yaml (de lá só se lê a seção account para a trava de conta DEMO).
+# Guardas FIXAS no código (agents/us100_rsi2_h1.py): 1 posição, só compra, perda diária 2% do saldo,
+# sem entradas 20:55-21:10 UTC, spread > 3x mediana bloqueia entrada, só DEMO.
+#
+# ATENÇÃO (backtest/claude_code/us100_validacao/validacao_rsi2.md): reprovada em 10 anos de H1 do MT5
+# (PF 1.05, prejuízo em 8 de 11 anos). Os números de referência abaixo valem só para 09/2025-11/2026.
+
+agente_us100_rsi2_h1:
+  name: us100_rsi2_h1
+  enabled: true
+  kill_switch: false             # true = zera a posição e não abre novas (relido a cada 60 s)
+                                 # alternativa sem editar: criar o arquivo state/KILL_US100_RSI2_H1
+  symbol: US100Cash
+  magic: 20261115
+  lot: min                       # min = volume mínimo do símbolo (XM: 0.1 no US100Cash)
+  timeframe: H1
+
+  # Referência (09/2025-11/2026): 85 trades, acerto real 69%, PF 1.99, DD 547 pts, pior -314 pts.
+  strategy:
+    rsi_period: 2
+    rsi_threshold: 5             # entrada: RSI(2) < 5 e close > SMA(100) no fechamento H1
+    ma_period: 100
+    exit_rsi_period: 5
+    exit_rsi_level: 60           # saída: fechamento H1 com RSI(5) > 60 -> fecha no open seguinte
+    atr_period: 14
+    sl_atr: 3.0                  # SL inicial = entrada - 3 x ATR(14) da barra do sinal
+    trail_activate_atr: 1.5      # trailing liga quando a máxima desde a entrada >= entrada + 1.5 x ATR(sinal)
+    trail_atr: 1.5               # stop = máxima - 1.5 x ATR(14) atual, a cada fechamento, só sobe
+
+  bars: 1500                     # H1 fechadas para os indicadores
+  spread_median_bars: 500        # mediana do spread das últimas N barras H1 (guarda de 3x)
+  signal_max_age_seconds: 300
+  deviation_points: 500
+  poll_seconds: 1.0
