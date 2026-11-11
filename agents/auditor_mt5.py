@@ -74,10 +74,10 @@ def agent_names(cfg: Dict[str, Any]) -> Dict[int, str]:
     return names
 
 
-def standalone_agent_names(config_dir: Optional[Path] = None) -> Dict[int, str]:
-    """Agentes com YAML próprio (config/agente_*.yaml, ex.: agente_rsi7_h1 magic 20261114)."""
+def standalone_agents(config_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Agentes com YAML próprio (config/agente_*.yaml): magic, nome, ligado e símbolo."""
     import yaml
-    out: Dict[int, str] = {}
+    out: List[Dict[str, Any]] = []
     for path in sorted((config_dir or ROOT / "config").glob("agente_*.yaml")):
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -86,8 +86,34 @@ def standalone_agent_names(config_dir: Optional[Path] = None) -> Dict[int, str]:
             continue
         for section, value in data.items():
             if isinstance(value, dict) and "magic" in value:
-                out[int(value["magic"])] = str(value.get("name") or section)
+                out.append({"magic": int(value["magic"]), "nome": str(value.get("name") or section),
+                            "ligado": bool(value.get("enabled", True)), "simbolo": value.get("symbol", "")})
     return out
+
+
+def standalone_agent_names(config_dir: Optional[Path] = None) -> Dict[int, str]:
+    """Agentes com YAML próprio (config/agente_*.yaml, ex.: agente_rsi7_h1 magic 20261114)."""
+    return {a["magic"]: a["nome"] for a in standalone_agents(config_dir)}
+
+
+def agent_roster(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Todos os agentes configurados, com ou sem trade na janela: nome -> {ligado, simbolos}.
+
+    O motor (magic único) entra separado por sub-agente (engine A2/A3/A4) conforme symbols.*.agents."""
+    roster: Dict[str, Dict[str, Any]] = {}
+    for sym, sc in (cfg.get("symbols") or {}).items():
+        for a in sc.get("agents") or []:
+            r = roster.setdefault(f"engine {str(a).split('_')[0]}", {"ligado": False, "simbolos": []})
+            r["ligado"] = r["ligado"] or bool(sc.get("enabled"))
+            if sc.get("enabled"):
+                r["simbolos"].append(sym)
+    for section, value in cfg.items():
+        if isinstance(value, dict) and "magic" in value and section != "account":
+            roster[section] = {"ligado": bool(value.get("enabled", True)),
+                               "simbolos": [value["symbol"]] if value.get("symbol") else []}
+    for a in standalone_agents():
+        roster[a["nome"]] = {"ligado": a["ligado"], "simbolos": [a["simbolo"]] if a["simbolo"] else []}
+    return roster
 
 
 def agent_of(magic: int, entry_comment: str, names: Dict[int, str]) -> str:
@@ -99,7 +125,8 @@ def agent_of(magic: int, entry_comment: str, names: Dict[int, str]) -> str:
 
 
 # ----------------------------------------------------------------- coleta
-def collect(mt5: Any, hours: float, names: Dict[int, str], server_time: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+def collect(mt5: Any, hours: float, names: Dict[int, str], server_time: str, now: Optional[datetime] = None,
+            roster: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     acc = mt5.account_info()
     if acc is None:
@@ -116,7 +143,11 @@ def collect(mt5: Any, hours: float, names: Dict[int, str], server_time: str, now
     raw = mt5.history_deals_get(start.replace(tzinfo=None) - timedelta(days=3),
                                 now.replace(tzinfo=None) + timedelta(days=1)) or []
     trades = closed_trades(raw, start, names, server_time)
+    # acumulado desde o início da conta, para o desempenho de cada agente não depender da janela
+    raw_all = mt5.history_deals_get(datetime(2020, 1, 1), now.replace(tzinfo=None) + timedelta(days=1)) or []
+    history = closed_trades(raw_all, datetime(2000, 1, 1, tzinfo=timezone.utc), names, server_time)
     return {"gerado_utc": now.strftime("%Y-%m-%d %H:%M"), "janela_horas": hours,
+            "agentes": agents_table(trades, history, positions, roster or {}),
             "conta": {"login": int(acc.login), "demo": int(acc.trade_mode) == 0, "saldo": float(acc.balance),
                       "equity": float(acc.equity), "margem_livre": float(acc.margin_free),
                       "pnl_flutuante": round(float(acc.equity) - float(acc.balance), 2),
@@ -165,6 +196,21 @@ def summarize(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
             "por_agente": {k: _stats(v) for k, v in sorted(by_agent.items())}}
 
 
+def agents_table(window: List[Dict[str, Any]], history: List[Dict[str, Any]], positions: List[Dict[str, Any]],
+                 roster: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Uma linha por agente configurado (mesmo sem trades) + qualquer outro que apareça nos dados (manual etc.)."""
+    seen = list(roster) + [x["agente"] for x in history + window + positions if x["agente"] not in roster]
+    out: Dict[str, Dict[str, Any]] = {}
+    for name in dict.fromkeys(seen):
+        r = roster.get(name, {})
+        out[name] = {"ligado": r.get("ligado"), "simbolos": r.get("simbolos", []),
+                     "janela": _stats([t["pnl"] for t in window if t["agente"] == name]),
+                     "acumulado": _stats([t["pnl"] for t in history if t["agente"] == name]),
+                     "abertas": sum(1 for p in positions if p["agente"] == name),
+                     "pnl_aberto": round(sum(p["pnl"] for p in positions if p["agente"] == name), 2)}
+    return out
+
+
 def needs_ai(data: Dict[str, Any]) -> bool:
     return bool(data["trades"]) or any(p["sem_sl"] for p in data["posicoes"])
 
@@ -196,12 +242,32 @@ def save_lesson(lesson: str, now: datetime, path: Optional[Path] = None) -> None
         fh.write(f"- {now:%Y-%m-%d %H:%M} UTC: {lesson}\n")
 
 
+class MissingApiKey(RuntimeError):
+    pass
+
+
+def _secret(name: str) -> str:
+    """Ambiente primeiro; se faltar OU estiver vazio, o .env do projeto (load_dotenv não sobrescreve uma variável
+    já definida, mesmo vazia — causa do TypeError "Could not resolve authentication method")."""
+    v = os.getenv(name, "").strip()
+    if not v:
+        try:
+            from dotenv import dotenv_values
+            v = str(dotenv_values(ROOT / ".env").get(name) or "").strip()
+        except Exception:  # noqa: BLE001 — sem python-dotenv ou sem .env: segue vazio
+            v = ""
+    return v
+
+
 def make_client() -> Any:
-    """Lê ANTHROPIC_API_KEY do ambiente. Chave não vinculada a um workspace exige o cabeçalho
+    """ANTHROPIC_API_KEY do ambiente ou do .env. Chave não vinculada a um workspace exige o cabeçalho
     anthropic-workspace-id: vem de ANTHROPIC_WORKSPACE_ID, como no restante do projeto (config/settings.py)."""
     import anthropic
-    ws = os.getenv("ANTHROPIC_WORKSPACE_ID", "").strip()
-    return anthropic.Anthropic(default_headers={"anthropic-workspace-id": ws} if ws else None)
+    key = _secret("ANTHROPIC_API_KEY")
+    if not key:
+        raise MissingApiKey("ANTHROPIC_API_KEY não definida no ambiente nem no .env")
+    ws = _secret("ANTHROPIC_WORKSPACE_ID")
+    return anthropic.Anthropic(api_key=key, default_headers={"anthropic-workspace-id": ws} if ws else None)
 
 
 def ask_claude(data: Dict[str, Any], memory: str, client: Any = None) -> str:
@@ -222,33 +288,92 @@ def ask_claude(data: Dict[str, Any], memory: str, client: Any = None) -> str:
 
 
 # ----------------------------------------------------------------- relatório e Telegram
+def _pf(v: Any) -> str:
+    return "∞" if v == "inf" else ("–" if v is None else f"{v:.2f}")
+
+
+def _agent_line(name: str, a: Dict[str, Any]) -> List[str]:
+    j, t = a["janela"], a["acumulado"]
+    status = "" if a.get("ligado") in (None, True) else " (desligado)"
+    syms = f" [{', '.join(a['simbolos'])}]" if a.get("simbolos") else ""
+    win = (f"   Janela: {j['trades']} trades | {j['pnl']:+.2f} | acerto {j['win_rate_pct']:.0f}% | "
+           f"PF {_pf(j['profit_factor'])}" if j["trades"] else "   Janela: sem trades fechados")
+    tot = (f"   Acumulado: {t['trades']} trades | {t['pnl']:+.2f} | acerto {t['win_rate_pct']:.0f}% | "
+           f"PF {_pf(t['profit_factor'])}" if t.get("trades") else "   Acumulado: sem trades")
+    out = [f"• {name}{syms}{status}", win, tot]
+    if a.get("abertas"):
+        out.append(f"   Aberto agora: {a['abertas']} posição(ões) | {a['pnl_aberto']:+.2f}")
+    return out
+
+
 def local_report(data: Dict[str, Any]) -> str:
+    """Texto puro para o Telegram (sem Markdown, que quebra com _ e * nos nomes): blocos separados por linha
+    em branco e um bloco por agente configurado, inclusive os que não fecharam trades na janela."""
     c, tot = data["conta"], data["resumo"]["total"]
-    lines = [f"Auditor MT5 | {data['gerado_utc']} UTC | janela {data['janela_horas']:g}h",
-             f"Conta #{c['login']} {'DEMO' if c['demo'] else 'REAL'} | saldo {c['saldo']:.2f} | equity {c['equity']:.2f} | "
-             f"margem livre {c['margem_livre']:.2f} | DD flutuante {c['dd_flutuante_pct']}%",
-             f"Trades: {tot['trades']} | PnL {tot['pnl']:+.2f} | win {tot['win_rate_pct']}% | PF {tot['profit_factor']}"]
-    for agent, s in data["resumo"]["por_agente"].items():
-        lines.append(f"  {agent}: {s['trades']} trades, {s['pnl']:+.2f}, PF {s['profit_factor']}")
+    lines = [f"📊 AUDITOR MT5 — {data['gerado_utc']} UTC",
+             f"Janela: últimas {data['janela_horas']:g}h",
+             "",
+             f"💰 CONTA #{c['login']} ({'DEMO' if c['demo'] else 'REAL'})",
+             f"Saldo: {c['saldo']:.2f} | Equity: {c['equity']:.2f}",
+             f"Margem livre: {c['margem_livre']:.2f}",
+             f"Flutuante: {c.get('pnl_flutuante', 0.0):+.2f} | DD flutuante: {c['dd_flutuante_pct']}%",
+             "",
+             "📈 RESULTADO DA JANELA",
+             f"{tot['trades']} trades | PnL {tot['pnl']:+.2f}" + (
+                 f" | acerto {tot['win_rate_pct']:.0f}% | PF {_pf(tot['profit_factor'])}" if tot["trades"] else ""),
+             "",
+             "🤖 AGENTES"]
+    agents = data.get("agentes") or {k: {"janela": v, "acumulado": {"trades": 0}, "abertas": 0, "ligado": None}
+                                      for k, v in data["resumo"]["por_agente"].items()}
+    for name, a in agents.items():
+        lines += _agent_line(name, a)
+    lines += ["", f"📌 POSIÇÕES ABERTAS ({len(data['posicoes'])})"]
+    if not data["posicoes"]:
+        lines.append("nenhuma")
     for p in data["posicoes"]:
-        lines.append(f"  aberta #{p['ticket']} {p['simbolo']} {p['tipo']} {p['lote']} {p['agente']} "
-                     f"SL={'SEM SL' if p['sem_sl'] else p['sl']} PnL {p['pnl']:+.2f}")
+        lines += [f"• #{p['ticket']} {p['simbolo']} {p['tipo']} {p['lote']:g} — {p['agente']}",
+                  f"   SL: {'⚠️ SEM SL' if p['sem_sl'] else p['sl']} | TP: {p['tp'] or '–'} | PnL {p['pnl']:+.2f}"]
     return "\n".join(lines)
 
 
+def split_message(text: str, limit: int = TG_LIMIT) -> List[str]:
+    """Partes de até `limit` caracteres sem cortar linhas (o Telegram aceita 4096 por mensagem)."""
+    parts: List[str] = []
+    cur = ""
+    for line in text.split("\n"):
+        while len(line) > limit:                         # linha gigante (raro): corta no limite
+            if cur:
+                parts.append(cur)
+                cur = ""
+            parts.append(line[:limit])
+            line = line[limit:]
+        if cur and len(cur) + len(line) + 1 > limit:
+            parts.append(cur)
+            cur = line
+        else:
+            cur = f"{cur}\n{line}" if cur else line
+    if cur:
+        parts.append(cur)
+    return parts
+
+
 def send_telegram(text: str, post: Callable[..., Any] = None) -> bool:
-    token, chat = os.getenv("TG_TOKEN"), os.getenv("TG_CHAT_ID")
+    token, chat = _secret("TG_TOKEN"), _secret("TG_CHAT_ID")
     if not token or not chat:
         log.warning("TG_TOKEN/TG_CHAT_ID não definidos: relatório não enviado ao Telegram")
         return False
     if post is None:
         import requests
         post = requests.post
-    r = post(f"https://api.telegram.org/bot{token}/sendMessage",
-             data={"chat_id": chat, "text": text[:TG_LIMIT]}, timeout=20)
-    ok = getattr(r, "status_code", 200) == 200
-    if not ok:
-        log.error("Telegram recusou: HTTP %s %s", getattr(r, "status_code", "?"), getattr(r, "text", "")[:200])
+    ok = True
+    parts = split_message(text, TG_LIMIT - 12)
+    for i, part in enumerate(parts, 1):
+        body = part if len(parts) == 1 else f"({i}/{len(parts)})\n{part}"
+        r = post(f"https://api.telegram.org/bot{token}/sendMessage",
+                 data={"chat_id": chat, "text": body, "disable_web_page_preview": "true"}, timeout=20)
+        if getattr(r, "status_code", 200) != 200:
+            ok = False
+            log.error("Telegram recusou: HTTP %s %s", getattr(r, "status_code", "?"), getattr(r, "text", "")[:200])
     return ok
 
 
@@ -258,7 +383,8 @@ def run(hours: float, mt5: Any, cfg: Dict[str, Any], claude_client: Any = None, 
     now = now or datetime.now(timezone.utc)
     names = agent_names(cfg)
     try:
-        data = collect(ReadOnlyMT5(mt5), hours, names, cfg["account"].get("server_time", "ny_plus_7"), now)
+        data = collect(ReadOnlyMT5(mt5), hours, names, cfg["account"].get("server_time", "ny_plus_7"), now,
+                       roster=agent_roster(cfg))
     except Exception as exc:  # noqa: BLE001
         log.exception("falha ao ler o MT5")
         msg = f"Auditor MT5 | STATUS: CRÍTICO\nFalha ao ler o MT5: {exc}\nVerifique se o terminal está aberto e logado na VPS."
@@ -272,12 +398,13 @@ def run(hours: float, mt5: Any, cfg: Dict[str, Any], claude_client: Any = None, 
             lesson = extract_lesson(analysis)
             if lesson:
                 save_lesson(lesson, now)
-            report = f"{report}\n\n{analysis}"
+            report = f"{report}\n\n🧠 ANÁLISE DA IA\n{analysis}"
         except Exception as exc:  # noqa: BLE001
             log.exception("falha na análise do Claude")
-            report += f"\n\nAnálise de IA indisponível ({type(exc).__name__}). Dados acima calculados localmente."
+            why = str(exc) if isinstance(exc, MissingApiKey) else type(exc).__name__
+            report += f"\n\n🧠 Análise de IA indisponível ({why}). Dados acima calculados localmente."
     else:
-        report += "\n\nSTATUS: OK (sem trades na janela e nenhuma posição sem SL; IA não acionada)"
+        report += "\n\n✅ STATUS: OK\nSem trades na janela e nenhuma posição sem SL (IA não acionada)."
     log.info("relatório:\n%s", report)
     if telegram:
         send_telegram(report, post)

@@ -133,9 +133,58 @@ def test_extract_lesson():
     assert aud.extract_lesson("sem formato") is None
 
 
-def test_workspace_header_from_env(monkeypatch):
+def test_workspace_header_from_env(monkeypatch, tmp_path):
+    monkeypatch.setattr(aud, "ROOT", tmp_path)                  # sem .env: só o ambiente conta
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
     monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_teste")
     assert aud.make_client().default_headers.get("anthropic-workspace-id") == "wrkspc_teste"
     monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID")
     assert "anthropic-workspace-id" not in aud.make_client().default_headers
+
+
+# ----------------------------------------------------------------- relatório com todos os agentes
+def test_roster_lists_every_configured_agent(cfg):
+    r = aud.agent_roster(cfg)
+    for name in ("engine A2", "engine A3", "engine A4", "goldflip", "btcflip", "sweep48", "capitulation", "rsi20",
+                 "goldnight", "agente_rsi7_h1", "us100_rsi2_h1"):
+        assert name in r, name
+    assert "US500Cash" in r["engine A3"]["simbolos"]
+
+
+def test_report_shows_agents_without_trades_and_cumulative(cfg):
+    data = aud.collect(FakeMT5(deals=DEALS), 20, aud.agent_names(cfg), "ny_plus_7", NOW, roster=aud.agent_roster(cfg))
+    ag = data["agentes"]
+    assert ag["engine A3"]["janela"]["trades"] == 0                  # sem trade na janela, mas listado
+    assert ag["goldnight"]["acumulado"]["trades"] == 2               # o trade fora da janela entra no acumulado
+    assert ag["goldnight"]["janela"]["trades"] == 1
+    text = aud.local_report(data)
+    assert "• engine A3 [US500Cash]\n   Janela: sem trades fechados" in text
+    assert "\n\n🤖 AGENTES\n" in text and "\n\n📌 POSIÇÕES ABERTAS (0)\nnenhuma" in text
+    assert all(len(line) < 140 for line in text.splitlines())
+
+
+def test_split_message_keeps_lines_whole():
+    text = "\n".join(f"linha {i:03d} " + "x" * 50 for i in range(200))
+    parts = aud.split_message(text, 1000)
+    assert len(parts) > 1 and all(len(p) <= 1000 for p in parts)
+    assert "\n".join(parts) == text
+
+
+def test_long_report_goes_in_several_telegram_messages(monkeypatch):
+    monkeypatch.setenv("TG_TOKEN", "t")
+    monkeypatch.setenv("TG_CHAT_ID", "c")
+    sent = []
+    ok = aud.send_telegram("\n".join("y" * 100 for _ in range(100)),
+                           post=lambda url, data, timeout: sent.append(data["text"]) or types.SimpleNamespace(status_code=200))
+    assert ok and len(sent) == 3 and sent[0].startswith("(1/3)\n") and all(len(s) <= 4000 for s in sent)
+
+
+def test_api_key_falls_back_to_dotenv_when_env_is_empty(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=da_env_file\n", encoding="utf-8")
+    monkeypatch.setattr(aud, "ROOT", tmp_path)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+    assert aud.make_client().api_key == "da_env_file"
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    with pytest.raises(aud.MissingApiKey):
+        aud.make_client()
