@@ -101,7 +101,7 @@ MT5_RETCODES: Dict[int, str] = {
     10022: "Order state changed (10022) - Estado da ordem mudou",
     10023: "Too many open requests (10023) - Fila de requisições cheia",
     10024: "No changes (10024) - Nenhuma alteração",
-    10025: "AutoTrading disabled by server (10025) - AutoTrading bloqueado pelo servidor",
+    10025: "No changes in request (10025) - pedido sem mudança (SL/TP já são esses)",
     10026: "AutoTrading disabled by client terminal (10026) - Habilite o botão 'Algo Trading' no MT5",
     10027: "AutoTrading disabled (10027) - Negociação automatizada desabilitada",
     10028: "Request locked for processing (10028)",

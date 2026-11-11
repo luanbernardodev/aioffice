@@ -16,6 +16,7 @@ from typing import Any, Dict
 
 import pandas as pd
 
+from engine import lifecycle
 from engine.config import ROOT
 from engine.core import Engine
 from engine.features import build_features, server_to_utc
@@ -47,6 +48,17 @@ def _rates(mt5: Any, symbol: str, tf: str, n: int, server_time: str) -> pd.DataF
     return df
 
 
+MAX_CYCLE_ERRORS = 300   # ~5 min de falhas seguidas -> encerra (o .bat reinicia e reconecta)
+
+
+def _cycle_error(where: str, exc: Exception, n: int) -> None:
+    """Falha transitória do MT5 não derruba mais o processo; só após MAX_CYCLE_ERRORS seguidas."""
+    if n == 1 or n % 30 == 0:
+        log.warning("[LOOP] falha em %s (%d seguida(s)): %s: %s", where, n, type(exc).__name__, exc)
+    if n >= MAX_CYCLE_ERRORS:
+        raise RuntimeError(f"{n} falhas seguidas em {where}: {type(exc).__name__}: {exc}") from exc
+
+
 def _seed_risk_from_history(mt5: Any, cfg: Dict[str, Any], engine: Engine) -> None:
     """Após restart: recupera P&L realizado do dia (UTC) e sequência de perdas do magic do motor."""
     from datetime import datetime, timedelta, timezone
@@ -56,27 +68,38 @@ def _seed_risk_from_history(mt5: Any, cfg: Dict[str, Any], engine: Engine) -> No
     # history_deals_get usa horário do servidor; margem de 1 dia e filtro posterior em UTC
     deals = mt5.history_deals_get(start - timedelta(days=1), now + timedelta(days=1)) or []
     outs = [d for d in deals if d.magic == magic and d.entry == getattr(mt5, "DEAL_ENTRY_OUT", 1)]
+    entry_comment = {int(getattr(d, "position_id", 0)): str(getattr(d, "comment", "")) for d in deals
+                     if d.magic == magic and d.entry == getattr(mt5, "DEAL_ENTRY_IN", 0)}
     srv = cfg["account"].get("server_time", "ny_plus_7")
     day_pnl, results = 0.0, []
     for d in sorted(outs, key=lambda x: x.time):
         pnl = float(d.profit) + float(d.swap) + float(d.commission)
-        results.append(pnl)
+        fib = "FIB_LIMIT" in entry_comment.get(int(getattr(d, "position_id", 0)), "")
+        results.append((pnl, int(d.time), str(d.symbol), fib))
         if server_to_utc([int(d.time)], srv).iloc[0] >= pd.Timestamp(start):
             day_pnl += pnl
     engine.risk._roll_day(now)
     engine.risk.day_pnl = day_pnl
-    streak = 0
-    for pnl in reversed(results):
-        if pnl < 0:
-            streak += 1
-        else:
-            break
-    engine.risk.streak = streak
+    engine.risk.streak = loss_streak(results)
+    streak = engine.risk.streak
     log.info("[A5] Estado recuperado: P&L do dia %.2f USD | perdas seguidas %d", day_pnl, streak)
     if day_pnl <= -engine.risk.daily_stop:
         nxt = start + timedelta(days=1)
         engine.risk.paused_until, engine.risk.pause_reason = nxt, "daily_stop"
         log.warning("[A5] Stop diário já atingido hoje: pausado até %s", nxt)
+
+
+def loss_streak(results: list, group_seconds: int = 60) -> int:
+    """Perdas seguidas a partir do fim. results: (pnl, epoch, ativo, é_LIMIT_FIB) em ordem cronológica.
+    LIMITs FIB do A2 do mesmo ativo fechadas com até `group_seconds` entre si (mesmo SL) contam como uma."""
+    streak, prev = 0, None
+    for pnl, t, sym, fib in reversed(results):
+        if pnl >= 0:
+            break
+        if not (fib and prev and prev[2] and prev[1] == sym and abs(prev[0] - t) <= group_seconds):
+            streak += 1
+        prev = (t, sym, fib)
+    return streak
 
 
 def run(cfg: Dict[str, Any], dry_run: bool) -> None:
@@ -96,7 +119,8 @@ def run(cfg: Dict[str, Any], dry_run: bool) -> None:
         lot = float(cfg["symbols"][s]["lot"])
         if lot < si.volume_min:
             raise RuntimeError(f"{s}: lote {lot} < volume_min {si.volume_min}")
-        specs[s] = {"value_per_unit": si.trade_tick_value / si.trade_tick_size, "digits": si.digits, "point": si.point}
+        specs[s] = {"value_per_unit": si.trade_tick_value / si.trade_tick_size, "digits": si.digits, "point": si.point,
+                    "tick_size": si.trade_tick_size, "volume_min": si.volume_min, "volume_step": si.volume_step}
 
     broker = SimBroker(specs, immediate_market=True) if dry_run else MT5Broker(mt5, cfg, specs)
     trades_csv = cfg["logging"]["trades_csv"]
@@ -128,11 +152,19 @@ def run(cfg: Dict[str, Any], dry_run: bool) -> None:
     log.info("=== MOTOR DETERMINÍSTICO | conta #%s DEMO | DRY_RUN=%s | ativos=%s ===", info.login, dry_run, symbols)
     last_bar: Dict[str, int] = {}
     last_hb = 0.0
+    errors = 0                                   # ciclos seguidos com falha (MT5 desconectado etc.)
     try:
         while True:
             loop_t = time.time()
-            if not dry_run:
-                broker.sync()
+            try:
+                if not dry_run:
+                    broker.sync()
+                errors = 0
+            except Exception as exc:  # noqa: BLE001
+                errors += 1
+                _cycle_error("sync", exc, errors)
+                time.sleep(min(30.0, float(errors)))
+                continue
             for s in symbols:
                 tick = mt5.symbol_info_tick(s)
                 if tick is None:
@@ -140,7 +172,10 @@ def run(cfg: Dict[str, Any], dry_run: bool) -> None:
                 now = pd.Timestamp.now(tz="UTC")
                 if dry_run:
                     broker.process_tick(s, now, tick.bid, tick.ask)
-                engine.manage(s, tick.bid, tick.ask)
+                try:
+                    engine.manage(s, tick.bid, tick.ask)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("[%s] falha no trailing (segue no próximo ciclo): %s: %s", s, type(exc).__name__, exc)
                 head = mt5.copy_rates_from_pos(s, mt5.TIMEFRAME_M5, 1, 1)
                 if head is None or len(head) == 0:
                     continue
@@ -166,13 +201,17 @@ def run(cfg: Dict[str, Any], dry_run: bool) -> None:
                     log.exception("[%s] falha no ciclo do supervisor: %s", sup.tag, exc)
             if time.time() - last_hb >= 60:
                 last_hb = time.time()
-                log.info("[HEARTBEAT] posições=%d pendentes=%d | dia=%.2f USD | streak=%d | %s",
+                blocked = engine.spread_block_summary()
+                log.info("[HEARTBEAT] posições=%d pendentes=%d | dia=%.2f USD | streak=%d | %s%s",
                          len(broker.open_positions()), len(broker.pending_orders()), engine.risk.day_pnl,
                          engine.risk.streak, " | ".join(f"{k}: {v}" for k, v in engine.last_status.items())
-                         + "".join(f" | {sup.summary()}" for sup in supervisors))
+                         + "".join(f" | {sup.summary()}" for sup in supervisors),
+                         f" | bloqueadas por spread hoje: {blocked}" if blocked else "")
+                lifecycle.beat()
             time.sleep(max(0.0, 1.0 - (time.time() - loop_t)))
     except KeyboardInterrupt:
         log.info("Encerrando motor...")
+        lifecycle.record_exit("KeyboardInterrupt (Ctrl+C / janela fechada)")
     finally:
         if not dry_run:
             broker.cancel_all_pending()  # posições ficam protegidas por SL/TP na corretora

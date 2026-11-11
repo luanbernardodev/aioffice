@@ -4,7 +4,8 @@
   TP1 = 1.5R, alvo final = max(extensão Fib, TP1).
 - Exposição: máx. 6 (posições + pendentes) no total, 3 por ativo.
 - Stop diário (USD realizado no dia UTC) -> pausa até o dia seguinte.
-- N perdas seguidas -> pausa de 2h.
+- N perdas seguidas -> pausa de 2h. As LIMITs FIB do A2 de um mesmo impulso são um grupo: várias
+  perdas do mesmo grupo contam como UMA perda na sequência.
 - Trailing: ativa em max(1R, 3 x spread) -> SL = entrada ± spread (breakeven travado),
   depois trailing de 1 x ATR(M5), só a favor, nunca recua.
 """
@@ -18,6 +19,35 @@ from typing import Any, Dict, Optional, Tuple
 from engine.types import BUY, ClosedTrade, OrderIntent, Position
 
 log = logging.getLogger("engine.risk")
+
+
+def is_fib_limit(setup: str) -> bool:
+    return str(setup).startswith("FIB_LIMIT")
+
+
+def streak_group(t: ClosedTrade) -> Optional[tuple]:
+    """Chave de grupo para a sequência de perdas (None = trade conta sozinho)."""
+    if t.group and is_fib_limit(t.setup):
+        return (t.agent, t.symbol, t.group)
+    return None
+
+
+def split_volume(lot: float, n: int, vmin: float, step: float) -> Tuple[float, int]:
+    """Divide 1R (= `lot`) entre até `n` ordens. Retorna (volume por ordem, quantas ordens cabem).
+
+    Se lot/n ficar abaixo do volume mínimo, reduz o número de ordens (nunca passa de `lot` no total).
+    """
+    n = max(1, int(n))
+    step = step if step and step > 0 else 0.01
+    vmin = vmin if vmin and vmin > 0 else step
+    if lot < vmin - 1e-9:
+        return 0.0, 0
+    k = min(n, int(lot / vmin + 1e-9))
+    vol = int((lot / k) / step + 1e-9) * step
+    while vol < vmin - 1e-9 and k > 1:
+        k -= 1
+        vol = int((lot / k) / step + 1e-9) * step
+    return round(vol, 8), k
 
 
 class RiskManager:
@@ -41,6 +71,7 @@ class RiskManager:
         self.streak = 0
         self.paused_until: Optional[datetime] = None
         self.pause_reason = ""
+        self._last_loss_group: Optional[tuple] = None
 
     # ------------------------------------------------------------ pausas
     def _roll_day(self, now: datetime) -> None:
@@ -63,7 +94,14 @@ class RiskManager:
         now = t.closed_at.to_pydatetime() if hasattr(t.closed_at, "to_pydatetime") else t.closed_at
         self._roll_day(now)
         self.day_pnl += t.pnl_usd
-        self.streak = self.streak + 1 if t.pnl_usd < 0 else 0
+        grp = streak_group(t)
+        if t.pnl_usd < 0:
+            if grp is None or grp != self._last_loss_group:
+                self.streak += 1
+            self._last_loss_group = grp
+        else:
+            self.streak = 0
+            self._last_loss_group = None
         if self.day_pnl <= -self.daily_stop:
             nxt = datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), tzinfo=now.tzinfo)
             self.paused_until, self.pause_reason = nxt, "daily_stop"

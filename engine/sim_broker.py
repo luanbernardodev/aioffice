@@ -90,7 +90,7 @@ class SimBroker:
         r = (price - pos.entry) * pos.side / pos.initial_risk if pos.initial_risk > 0 else 0.0
         tr = ClosedTrade(pos.agent, pos.setup, pos.symbol, pos.side, pos.volume, pos.entry, pos.initial_sl,
                          pos.tp, pos.tp1, price, pos.opened_at, t, reason, pnl, r,
-                         pos.spread_at_entry, pos.atr_at_entry, ticket=pos.id)
+                         pos.spread_at_entry, pos.atr_at_entry, ticket=pos.id, group=pos.group)
         if self.on_close:
             self.on_close(tr)
 

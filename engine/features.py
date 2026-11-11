@@ -50,7 +50,7 @@ def build_h1(h1: pd.DataFrame, rcfg: Dict[str, Any]) -> pd.DataFrame:
                     np.where((d["close"] < d["h1_sma"]) & (slope < -min_slope), -1, 0))
     d["h1_side"] = np.where(d["h1_sma"].isna() | slope.isna(), 0, side).astype(int)
     d["h1_above_ma"] = np.where(d["h1_sma"].isna(), 0, np.where(d["close"] > d["h1_sma"], 1, -1)).astype(int)
-    return d[["close_time", "h1_sma", "h1_side", "h1_above_ma", "close"]].rename(columns={"close": "h1_close"})
+    return d[["close_time", "h1_sma", "h1_side", "h1_above_ma", "h1_atr", "close"]].rename(columns={"close": "h1_close"})
 
 
 def build_m15(m15: pd.DataFrame, cfg: Dict[str, Any]) -> pd.DataFrame:
@@ -89,7 +89,7 @@ def build_features(m5: pd.DataFrame, m15: pd.DataFrame, h1: pd.DataFrame, cfg: D
         d15[c] = d15[c].fillna(0).astype(int)
 
     # M15 -> M5 (última M15 fechada até o fechamento da M5)
-    m15_cols = d15[["close_time", "m15_trend", "h1_side", "h1_above_ma", "h1_sma"]].copy()
+    m15_cols = d15[["close_time", "m15_trend", "h1_side", "h1_above_ma", "h1_sma", "h1_atr"]].copy()
     m15_cols["m15_i"] = np.arange(len(d15))
     m15_cols["m15_close_time"] = m15_cols["close_time"]
     d5 = pd.merge_asof(d5.sort_values("close_time"), m15_cols, on="close_time", direction="backward")

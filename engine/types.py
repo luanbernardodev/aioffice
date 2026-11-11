@@ -78,3 +78,4 @@ class ClosedTrade:
     atr_at_entry: float
     ticket: str = ""
     extra: dict = field(default_factory=dict)
+    group: str = ""          # impulso/BOS/episódio de origem (A2: as LIMITs FIB do mesmo impulso)

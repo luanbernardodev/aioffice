@@ -5,8 +5,10 @@
 """
 import argparse
 import logging
+import sys
 from pathlib import Path
 
+from engine import lifecycle
 from engine.config import ROOT, load_config
 from engine.live import run
 
@@ -24,7 +26,17 @@ def main() -> None:
                         handlers=[logging.StreamHandler(),
                                   logging.FileHandler(ROOT / "logs" / "engine.log", encoding="utf-8")])
     logging.getLogger("urllib3").setLevel(logging.WARNING)
-    run(cfg, dry_run=dry_run)
+    log = logging.getLogger("engine.main")
+    lifecycle.on_start()               # registra no log o motivo da parada anterior
+    try:
+        run(cfg, dry_run=dry_run)
+    except KeyboardInterrupt:
+        lifecycle.record_exit("KeyboardInterrupt (Ctrl+C / janela fechada)")
+    except BaseException as exc:       # noqa: BLE001  exceção não tratada: grava o motivo antes de morrer
+        reason = f"exceção não tratada: {type(exc).__name__}: {exc}"
+        log.critical("[ENCERRADO] %s", reason, exc_info=True)
+        lifecycle.record_exit(reason, exc)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

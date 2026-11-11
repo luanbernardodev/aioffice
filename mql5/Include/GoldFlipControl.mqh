@@ -46,6 +46,7 @@ struct GFControl
   };
 
 GFControl g_gf_ctl;
+string    g_gf_bar_reason = "";   // último motivo de entrada/não-entrada por barra (EA preenche; vai no status)
 double    g_gf_spread_sum = 0.0;
 long      g_gf_spread_n   = 0;
 
@@ -156,6 +157,17 @@ void GF_SampleSpread(const string sym)
    g_gf_spread_n++;
   }
 
+//--- texto seguro dentro de string JSON (sem aspas/barras/controles)
+string GF_JsonSafe(const string v)
+  {
+   string out = v;
+   StringReplace(out, "\\", "/");
+   StringReplace(out, "\"", "'");
+   StringReplace(out, "\r", " ");
+   StringReplace(out, "\n", " ");
+   return out;
+  }
+
 //--- status: posição, PnL do dia (UTC), trades/hora, spread médio desde o último status
 void GF_WriteStatus(const string sym, const long magic)
   {
@@ -207,10 +219,11 @@ void GF_WriteStatus(const string sym, const long magic)
    string js = StringFormat("{\"updated_at\":%I64d,\"symbol\":\"%s\",\"magic\":%I64d,\"position\":\"%s\","
                             "\"volume\":%.2f,\"net_lots\":%.2f,\"positions\":%d,\"floating_pnl\":%.2f,"
                             "\"day_pnl\":%.2f,\"trades_last_hour\":%d,\"avg_spread_points\":%.1f,"
-                            "\"control_enabled\":%s,\"control_regime\":\"%s\",\"control_age_s\":%I64d}",
+                            "\"control_enabled\":%s,\"control_regime\":\"%s\",\"control_age_s\":%I64d,"
+                            "\"last_bar_reason\":\"%s\"}",
                             (long)gmt, sym, magic, pos, vol, net, cnt, flt, day_pnl, trades_h, avg_sp,
                             eff ? "true" : "false", g_gf_ctl.regime,
-                            g_gf_ctl.loaded ? (long)gmt - g_gf_ctl.updated_at : -1);
+                            g_gf_ctl.loaded ? (long)gmt - g_gf_ctl.updated_at : -1, GF_JsonSafe(g_gf_bar_reason));
    int h = FileOpen(GF_STATUS_TMP, FILE_WRITE | FILE_TXT | FILE_ANSI);
    if(h == INVALID_HANDLE)
       return;

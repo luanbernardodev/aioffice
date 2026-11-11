@@ -23,6 +23,7 @@ from engine.types import BUY, ClosedTrade, OrderIntent, Position
 log = logging.getLogger("engine.mt5")
 
 STATE_FILE = ROOT / "state" / "mt5_meta.json"
+NO_CHANGES = 10025          # TRADE_RETCODE_NO_CHANGES: o pedido não muda nada (SL/TP já são esses)
 
 
 class AccountGuardError(RuntimeError):
@@ -184,16 +185,42 @@ class MT5Broker:
             self.meta[str(tk)] = intent_to_dict(it)
             self._save_state()
 
+    def _sym_digits_tick(self, symbol: str) -> tuple:
+        """(digits, tick_size) do symbol_info do terminal; cai para os specs se o terminal não responder."""
+        info = self.mt5.symbol_info(symbol)
+        spec = self.specs.get(symbol, {})
+        digits = int(getattr(info, "digits", spec.get("digits", 2)) if info is not None else spec.get("digits", 2))
+        tick = float(getattr(info, "trade_tick_size", 0.0) or 0.0) if info is not None else 0.0
+        if tick <= 0:
+            tick = float(spec.get("tick_size", 0.0) or spec.get("point", 0.0) or 10.0 ** -digits)
+        return digits, tick
+
     def modify_sl(self, pos_id: str, sl: float) -> bool:
+        """Move o SL de uma posição. Só envia se o SL arredondado melhorar >= 1 tick_size sobre o atual;
+        retcode 10025 (TRADE_RETCODE_NO_CHANGES) é tratado como no-op, sem log de erro e sem nova tentativa."""
         p = self.positions.get(pos_id)
         if p is None:
             return False
-        d = self._digits(p.symbol)
-        res = self._send({"action": self.mt5.TRADE_ACTION_SLTP, "position": int(pos_id), "symbol": p.symbol,
-                          "sl": round(sl, d), "tp": round(p.tp, d)})
-        if res is None:
+        d, tick = self._sym_digits_tick(p.symbol)
+        new_sl = round(round(sl / tick) * tick, d)
+        cur = float(p.sl or 0.0)
+        if cur > 0:
+            gain = (new_sl - cur) * p.side
+            if gain < tick - 1e-9:
+                return False
+        req = {"action": self.mt5.TRADE_ACTION_SLTP, "position": int(pos_id), "symbol": p.symbol,
+               "sl": new_sl, "tp": round(p.tp, d)}
+        verify_account(self.mt5, self.cfg)  # trava antes de CADA envio
+        res = self.mt5.order_send(req)
+        code = getattr(res, "retcode", None)
+        if code == NO_CHANGES:
+            log.debug("[MT5] SLTP sem mudança (10025) pos=%s sl=%s: no-op", pos_id, new_sl)
+            p.sl = new_sl
             return False
-        p.sl = round(sl, d)
+        if res is None or code not in (self.mt5.TRADE_RETCODE_DONE, self.mt5.TRADE_RETCODE_PLACED):
+            log.error("[MT5] recusado: %s | %s | req=%s", code, getattr(res, "comment", self.mt5.last_error()), req)
+            return False
+        p.sl = new_sl
         p.be_locked = True
         return True
 
@@ -249,4 +276,5 @@ class MT5Broker:
         if self.on_close:
             self.on_close(ClosedTrade(pos.agent, pos.setup, pos.symbol, pos.side, pos.volume, pos.entry,
                                       pos.initial_sl, pos.tp, pos.tp1, exit_px, pos.opened_at, closed_at, reason,
-                                      pnl, r, pos.spread_at_entry, pos.atr_at_entry, ticket=pos.id))
+                                      pnl, r, pos.spread_at_entry, pos.atr_at_entry, ticket=pos.id,
+                                      group=pos.group))

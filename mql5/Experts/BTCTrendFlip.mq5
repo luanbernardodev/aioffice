@@ -14,7 +14,7 @@
 //|  - Só opera em conta DEMO; recusa duas cópias.                   |
 //+------------------------------------------------------------------+
 #property copyright "quant-office-ai"
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 
 #define GF_CONTROL_FILE "btcflip_control.json"
@@ -47,6 +47,8 @@ struct Sig
    int    flip;            // +1 compra, -1 venda, 0 nada (barra fechada mais recente)
    double atr;             // ATR(14) Wilder
    double high1, low1, close1;
+   int    dir_now, dir_prev; // direção da SuperTrend na última barra fechada e na anterior
+   double ema;             // EMA200 na última barra fechada
   };
 
 //--- SuperTrend + EMA + ATR (Wilder) sobre as barras H4 fechadas, mais antiga primeiro
@@ -95,6 +97,7 @@ bool Compute(Sig &s)
    if(dir[k] == -1 && dir[k - 1] == 1 && r[k].close < ema[k])
       s.flip = -1;
    s.atr = atrN[k];
+   s.dir_now = dir[k]; s.dir_prev = dir[k - 1]; s.ema = ema[k];
    s.high1 = r[k].high; s.low1 = r[k].low; s.close1 = r[k].close;
    return true;
   }
@@ -126,6 +129,44 @@ bool Allowed(const int side, const double atr)
    if(g_gf_ctl.direction != 0 && side != g_gf_ctl.direction)
       return false;
    return true;
+  }
+
+//--- texto da condição que falhou (só para log; mesma ordem de Allowed/GF_CanOpen)
+string BlockReason(const int side, const double atr)
+  {
+   if(!g_gf_ctl.loaded)
+      return "controle ausente/ilegivel";
+   if(g_gf_ctl.flatten)
+      return "controle flatten=true";
+   if(!g_gf_ctl.enabled)
+      return "controle enabled=false";
+   if((long)TimeGMT() > g_gf_ctl.valid_until)
+      return StringFormat("controle vencido ha %I64ds", (long)TimeGMT() - g_gf_ctl.valid_until);
+   long spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   if(g_gf_ctl.max_spread > 0 && spread > g_gf_ctl.max_spread)
+      return StringFormat("spread %I64d > max_spread %d pts", spread, g_gf_ctl.max_spread);
+   if(g_gf_ctl.min_atr > 0 && atr < g_gf_ctl.min_atr)
+      return StringFormat("ATR %.2f < min_atr %.2f", atr, g_gf_ctl.min_atr);
+   if(g_gf_ctl.direction != 0 && side != g_gf_ctl.direction)
+      return StringFormat("sinal contra a direcao do supervisor (%+d)", g_gf_ctl.direction);
+   return "";
+  }
+
+//--- por que a barra não gerou sinal (SuperTrend não virou ou virou contra a EMA200)
+string NoSignalReason(const Sig &s)
+  {
+   if(s.dir_now == s.dir_prev)
+      return StringFormat("SuperTrend sem virada (dir=%+d)", s.dir_now);
+   if(s.dir_now == 1)
+      return StringFormat("virada p/ alta mas close %.2f <= EMA%d %.2f", s.close1, InpEMAPeriod, s.ema);
+   return StringFormat("virada p/ baixa mas close %.2f >= EMA%d %.2f", s.close1, InpEMAPeriod, s.ema);
+  }
+
+void BarLog(const string why)
+  {
+   g_gf_bar_reason = why;
+   PrintFormat("[BTCTrendFlip] H4 %s fechada: %s | controle enabled=%s regime=%s",
+               TimeToString(iTime(_Symbol, PERIOD_H4, 1)), why, g_gf_ctl.enabled ? "true" : "false", g_gf_ctl.regime);
   }
 
 void Open(const int side, const double atr, const string why)
@@ -229,7 +270,10 @@ void OnTick()
 
    Sig s;
    if(!Compute(s) || s.atr <= 0)
+     {
+      BarLog("sem entrada: barras/ATR insuficientes para o calculo");
       return;
+     }
    ulong t; int side;
    bool has = OwnPosition(t, side);
 
@@ -259,19 +303,30 @@ void OnTick()
         {
          CloseOwn("virada contrária da SuperTrend");
          if(Allowed(s.flip, s.atr))
+           {
+            BarLog("virada contraria: fecha e inverte");
             Open(s.flip, s.atr, "FLIP");
+           }
+         else
+            BarLog("virada contraria: fechou, sem inverter -> " + BlockReason(s.flip, s.atr));
         }
+      else
+         BarLog(StringFormat("posicao %s aberta, sem nova entrada (stop %.2f)", side == 1 ? "LONG" : "SHORT", g_stop));
       return;
      }
 
-   if(s.flip != 0)
+   if(s.flip == 0)
      {
-      if(Allowed(s.flip, s.atr))
-         Open(s.flip, s.atr, "ENTRY");
-      else
-         PrintFormat("[BTCTrendFlip] sinal %s ignorado: controle (enabled=%s regime=%s) | %s",
-                     s.flip == 1 ? "COMPRA" : "VENDA", g_gf_ctl.enabled ? "true" : "false", g_gf_ctl.regime,
-                     g_gf_ctl.reason);
+      BarLog("sem entrada: " + NoSignalReason(s));
+      return;
      }
+   if(Allowed(s.flip, s.atr))
+     {
+      BarLog(StringFormat("sinal %s", s.flip == 1 ? "COMPRA" : "VENDA"));
+      Open(s.flip, s.atr, "ENTRY");
+     }
+   else
+      BarLog(StringFormat("sinal %s ignorado: %s | supervisor: %s", s.flip == 1 ? "COMPRA" : "VENDA",
+                          BlockReason(s.flip, s.atr), g_gf_ctl.reason));
   }
 //+------------------------------------------------------------------+

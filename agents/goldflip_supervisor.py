@@ -117,6 +117,26 @@ def decide_control(reg: Dict[str, Any], now: datetime, gcfg: Dict[str, Any], poi
             "source": f"quant-office/{gcfg.get('name', 'goldflip')}_supervisor"}
 
 
+def control_mismatch(control: Dict[str, Any], status: Optional[Dict[str, Any]], max_status_age: int = 180) -> str:
+    """'' se o EA vê o mesmo enabled que o supervisor escreveu; senão o texto do problema.
+
+    O EA relê o controle a cada 60 s, então só acusa quando o controle já tem mais de 90 s e o status é recente.
+    """
+    if not control or not status:
+        return ""
+    now = int(time.time())
+    if now - int(status.get("updated_at", 0) or 0) > max_status_age:
+        return ""
+    if now - int(control.get("updated_at", now) or now) < 90:
+        return ""
+    want, seen = bool(control.get("enabled")), status.get("control_enabled")
+    if seen is None or bool(seen) == want:
+        return ""
+    age = status.get("control_age_s")
+    return (f"EA NÃO recebeu enabled={want}: vê control_enabled={seen} (idade do controle no EA: {age}s). "
+            "Arquivo em outra pasta MQL5/Files, controle vencido ou EA sem a versão nova?")
+
+
 def write_json_atomic(path: Path, obj: Dict[str, Any], retries: int = 5) -> None:
     """Escreve em .tmp e troca atomicamente (o EA nunca lê arquivo pela metade)."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -306,8 +326,13 @@ class GoldFlipSupervisor:
                  "EA vê enabled=%s | atualizado há %ds", self.tag, s.get("position"), float(s.get("volume", 0) or 0),
                  float(s.get("day_pnl", 0) or 0), s.get("trades_last_hour"), s.get("avg_spread_points"),
                  s.get("control_enabled"), age)
+        if s.get("last_bar_reason"):
+            log.info("[%s] EA, última barra: %s", self.tag, s.get("last_bar_reason"))
         if age > 180:
             log.warning("[%s] status do EA parado há %ds (EA desanexado ou Algo Trading desligado?)", self.tag, age)
+        mismatch = control_mismatch(self.control, s)
+        if mismatch:
+            log.warning("[%s] %s", self.tag, mismatch)
 
     def summary(self) -> str:
         c = self.control or {}

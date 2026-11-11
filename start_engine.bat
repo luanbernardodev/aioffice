@@ -10,6 +10,9 @@ start "AGENTE_RSI7_H1" cmd /c start_agente_rsi7_h1.bat
 :loop
 echo [%date% %time%] Iniciando motor (DEMO, DRY_RUN=False)...
 python run_engine.py --live-demo
-echo [%date% %time%] Motor encerrou (codigo %errorlevel%). Reiniciando em 30s... (feche a janela para parar)
+set EXITCODE=%errorlevel%
+echo [%date% %time%] Motor encerrou (codigo %EXITCODE%). Reiniciando em 30s... (feche a janela para parar)
+if not exist logs mkdir logs
+echo %date% %time% ^| start_engine.bat: python saiu com codigo %EXITCODE% >> logs\restarts.log
 timeout /t 30 /nobreak >nul
 goto loop

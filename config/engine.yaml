@@ -54,7 +54,9 @@ symbols:
   BTCUSD:
     enabled: true
     lot: 0.01
-    max_spread_atr: 0.50         # spread mediano XM ~0.42 x ATR(M5)
+    max_spread_atr: 0.50         # fallback (só se o ATR H1 faltar): spread mediano XM ~0.42 x ATR(M5)
+    max_spread_atr_h1: 0.25      # filtro do A1 contra ATR(14) do H1: spread ~40 USD vs ATR H1 mediano ~355 (~0.11)
+    # max_spread: 60             # alternativa: limite fixo em USD (tem prioridade sobre os dois acima)
     sessions: []                 # 24/7
     agents: [A4_RSI_REVERSAL]    # A2/A3 desligados no BTC por custo de spread (ver backtest)
 
