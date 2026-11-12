@@ -138,7 +138,7 @@ def run(cfg: Dict[str, Any], dry_run: bool) -> None:
 
     # Supervisores dos EAs (GoldFlipTrail, BTCTrendFlip): não operam; controlam os EAs via JSON em MQL5/Files
     supervisors = []
-    for section in ("goldflip", "btcflip", "goldnight"):
+    for section in ("goldflip", "btcflip", "goldnight", "goldnight_v2"):
         if not cfg.get(section, {}).get("enabled"):
             continue
         from agents.goldflip_supervisor import GoldFlipSupervisor
