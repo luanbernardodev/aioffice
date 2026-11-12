@@ -59,8 +59,7 @@ def main() -> int:
     print("\nUma vez só, no MT5 (o MT5 lembra nos próximos reinícios), marcando 'Permitir Algo Trading':\n"
           "  - gráfico GOLD M5   -> arrastar GoldFlipTrail\n"
           "  - gráfico BTCUSD H4 -> arrastar BTCTrendFlip\n"
-          "  - SEGUNDO gráfico GOLD M5 -> arrastar GoldNightFlip (se goldnight.enabled)
-"
+          "  - SEGUNDO gráfico GOLD M5 -> arrastar GoldNightFlip (se goldnight.enabled)\n"
           "  - TERCEIRO gráfico GOLD M5 -> arrastar GoldNightV2 (agente GOLD aprimorado, magic 20261116)")
     return 0
 
