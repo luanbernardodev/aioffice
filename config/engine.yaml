@@ -52,7 +52,7 @@ symbols:
       - {tz: America/New_York, start: "09:30", end: "16:00"}
     agents: [A2_PULLBACK, A3_BOS_RETEST]
   BTCUSD:
-    enabled: true
+    enabled: false               # 12/11: A4 desligado (sem trades; backtest negativo). Fica só A2/A3 no US500Cash
     lot: 0.01
     max_spread_atr: 0.50         # fallback (só se o ATR H1 faltar): spread mediano XM ~0.42 x ATR(M5)
     max_spread_atr_h1: 0.25      # filtro do A1 contra ATR(14) do H1: spread ~40 USD vs ATR H1 mediano ~355 (~0.11)
@@ -115,7 +115,7 @@ goldflip:                        # 6º agente: EA GoldFlipTrail (MQL5) supervisi
   max_spread_atr: 0.15           # max_spread (pontos) = 0.15 x ATR(M5) / point
 
 btcflip:                         # 7º agente: EA BTCTrendFlip (SuperTrend 10,3 H4 + EMA200 + trailing 3xATR)
-  enabled: true
+  enabled: false                 # 12/11: desligado (sem trades na semana). Sem supervisor o controle vence e o EA não abre
   symbol: BTCUSD
   magic: 20261109
   control_file: btcflip_control.json
@@ -157,7 +157,7 @@ sweep48:                         # agente de scalp BTCUSD M5; ocupa a vaga ocios
   signal_max_age_seconds: 60
 
 capitulation:                    # compra de exaustão em BTCUSD (processo próprio)
-  enabled: true
+  enabled: false                 # 12/11: desligado (sem trades na semana)
   symbol: BTCUSD
   magic: 20261111
   lot: 0.01
@@ -192,7 +192,7 @@ rsi20:                           # compra em RSI <= 20 no BTCUSD (mesmo código 
   signal_max_age_seconds: 60
 
 goldnight:                       # EA GoldNightFlip: GOLD M5 fora de Londres/NY
-  enabled: true
+  enabled: false                 # 12/11: desligado (6 trades, -26.00, PF 0.11 ao vivo)
   symbol: GOLD
   magic: 20261113
   control_file: goldnight_control.json

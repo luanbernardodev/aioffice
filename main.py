@@ -21,8 +21,10 @@ import asyncio
 import itertools
 import json
 import logging
+import os
 import random
 import threading
+import sys
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -420,6 +422,13 @@ def main() -> None:
         format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    if os.getenv("QUANT_ALLOW_LEGACY") != "1":
+        # 12/11: Setores 1-6 (magic 777777) DESATIVADOS por decisão do dono: 117 trades, -119.74, PF 0.11.
+        # Os agentes ativos rodam pelo start_engine.bat. Religar só com QUANT_ALLOW_LEGACY=1 no ambiente.
+        logging.error("main.py legado (Setores 1-6) desativado. Use start_engine.bat. "
+                      "Para forçar: QUANT_ALLOW_LEGACY=1.")
+        sys.exit(3)
 
     office = QuantOffice()
     if args.test_flow:

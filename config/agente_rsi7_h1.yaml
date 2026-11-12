@@ -4,7 +4,7 @@
 
 agente_rsi7_h1:
   name: agente_rsi7_h1
-  enabled: true
+  enabled: false                 # 12/11: desligado (sem trades na semana)
   kill_switch: false             # true = zera a posição e não abre novas (relido a cada 60 s)
                                  # alternativa sem editar: criar o arquivo state/KILL_AGENTE_RSI7_H1
   symbol: BTCUSD

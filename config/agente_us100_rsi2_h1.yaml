@@ -8,7 +8,7 @@
 
 agente_us100_rsi2_h1:
   name: us100_rsi2_h1
-  enabled: true
+  enabled: false                 # 12/11: desligado (sem trades; reprovado em 10 anos)
   kill_switch: false             # true = zera a posição e não abre novas (relido a cada 60 s)
                                  # alternativa sem editar: criar o arquivo state/KILL_US100_RSI2_H1
   symbol: US100Cash
