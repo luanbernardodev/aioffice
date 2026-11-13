@@ -200,18 +200,3 @@ def test_engine_broker_ignores_goldflip_positions(cfg):
     b.sync()
     assert b.positions == {}                     # posição do EA não foi adotada -> nunca será modificada
 
-
-def test_legacy_close_position_refuses_other_magic(monkeypatch):
-    import core.mt5_bridge as mb
-
-    sent = []
-    fake = types.SimpleNamespace(
-        positions_get=lambda ticket=None: [types.SimpleNamespace(ticket=ticket, magic=20261108, symbol="GOLD",
-                                                                 volume=0.01, type=0)],
-        order_send=lambda req: sent.append(req), ORDER_TYPE_BUY=0, ORDER_TYPE_SELL=1,
-        last_error=lambda: (0, ""))
-    monkeypatch.setattr(mb, "mt5", fake)
-    bridge = mb.MT5Bridge.__new__(mb.MT5Bridge)
-    bridge.mock = False
-    res = bridge.close_position(ticket=42, symbol="GOLD")
-    assert res["success"] is False and not sent

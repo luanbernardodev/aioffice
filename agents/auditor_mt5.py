@@ -31,6 +31,8 @@ MODEL = "claude-haiku-5-5"
 MAX_TOKENS = 600
 TG_LIMIT = 4000
 LEGACY_MAGIC = 777777
+# Fora da amostra: Setores 1-6 (legado, código removido em 13/11). Não entram em trades, totais nem agentes.
+EXCLUDED_MAGICS = {LEGACY_MAGIC}
 
 SYSTEM_PROMPT = (
     "Você é o auditor de risco de um sistema de trading automatizado (conta DEMO na XM, MT5). "
@@ -65,7 +67,7 @@ class ReadOnlyMT5:
 
 # ----------------------------------------------------------------- nomes dos agentes
 def agent_names(cfg: Dict[str, Any]) -> Dict[int, str]:
-    names = {LEGACY_MAGIC: "legado (Setores 1-6)", 0: "manual"}
+    names = {0: "manual"}
     names[int(cfg["account"]["magic"])] = "engine"
     for section, value in cfg.items():
         if isinstance(value, dict) and "magic" in value and section != "account":
@@ -133,6 +135,8 @@ def collect(mt5: Any, hours: float, names: Dict[int, str], server_time: str, now
         raise RuntimeError(f"account_info vazio: {mt5.last_error()}")
     positions = []
     for p in mt5.positions_get() or []:
+        if int(p.magic) in EXCLUDED_MAGICS:
+            continue
         positions.append({"ticket": int(p.ticket), "simbolo": p.symbol, "tipo": "BUY" if int(p.type) == 0 else "SELL",
                           "lote": float(p.volume), "entrada": float(p.price_open), "sl": float(p.sl), "tp": float(p.tp),
                           "pnl": round(float(p.profit) + float(getattr(p, "swap", 0.0)), 2), "magic": int(p.magic),
@@ -170,6 +174,8 @@ def closed_trades(deals: List[Any], start: datetime, names: Dict[int, str], serv
         if closed < start:
             continue
         entry = next((d for d in ds if int(d.entry) == 0), ds[0])
+        if int(entry.magic) in EXCLUDED_MAGICS:
+            continue
         pnl = sum(float(d.profit) + float(d.swap) + float(d.commission) for d in ds)
         out.append({"posicao": pid, "simbolo": entry.symbol, "agente": agent_of(int(entry.magic), str(entry.comment), names),
                     "magic": int(entry.magic), "lado": "BUY" if int(entry.type) == 0 else "SELL",

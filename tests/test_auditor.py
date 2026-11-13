@@ -188,3 +188,14 @@ def test_api_key_falls_back_to_dotenv_when_env_is_empty(monkeypatch, tmp_path):
     (tmp_path / ".env").write_text("", encoding="utf-8")
     with pytest.raises(aud.MissingApiKey):
         aud.make_client()
+
+
+def test_legacy_magic_is_out_of_the_sample(cfg):
+    legacy = [deal(9, 0, 0, 777777, 0.0, SRV(20, 0)), deal(9, 1, 1, 777777, -50.0, SRV(20, 30))]
+    pos = [types.SimpleNamespace(ticket=5, symbol="GOLD", type=0, volume=0.01, price_open=1.0, sl=0.0, tp=0.0,
+                                 profit=-3.0, swap=0.0, magic=777777, comment="")]
+    data = aud.collect(FakeMT5(positions=pos, deals=DEALS + legacy), 20, aud.agent_names(cfg), "ny_plus_7", NOW)
+    assert 9 not in [t["posicao"] for t in data["trades"]]
+    assert data["resumo"]["total"]["pnl"] == pytest.approx(-3.73) and data["posicoes"] == []
+    assert 777777 not in aud.agent_names(cfg)
+    assert not any("legado" in k for k in data["agentes"])
