@@ -199,3 +199,20 @@ def test_legacy_magic_is_out_of_the_sample(cfg):
     assert data["resumo"]["total"]["pnl"] == pytest.approx(-3.73) and data["posicoes"] == []
     assert 777777 not in aud.agent_names(cfg)
     assert not any("legado" in k for k in data["agentes"])
+
+
+def test_competition_leaderboard_counts_only_from_start():
+    hist = [{"agente": "goldflip", "pnl": 5.0, "fechado_utc": "2026-11-15 10:00"},      # antes do início
+            {"agente": "goldflip", "pnl": -2.0, "fechado_utc": "2026-11-16 10:00"},
+            {"agente": "v3_a", "pnl": 3.0, "fechado_utc": "2026-11-16 11:00"},
+            {"agente": "v3_a", "pnl": -1.0, "fechado_utc": "2026-11-17 11:00"},
+            {"agente": "v3_a", "pnl": 4.0, "fechado_utc": "2026-11-22 11:00"}]          # depois do fim
+    comp = aud.competition_table(hist, {"inicio_utc": "2026-11-16 00:00", "fim_utc": "2026-11-21 00:00",
+                                        "antigos": ["goldflip"], "novos": ["v3_a", "v3_b"]})
+    assert [r["agente"] for r in comp["placar"]] == ["v3_a", "v3_b", "goldflip"]
+    assert comp["placar"][0]["pnl"] == pytest.approx(2.0) and comp["placar"][0]["max_dd"] == pytest.approx(1.0)
+    assert comp["total_por_grupo"] == {"antigo": -2.0, "novo": 2.0}
+    text = aud.local_report({"gerado_utc": "x", "janela_horas": 24, "conta": {"login": 1, "demo": True, "saldo": 1,
+                             "equity": 1, "margem_livre": 1, "dd_flutuante_pct": 0}, "resumo": {"total": {"trades": 0,
+                             "pnl": 0}, "por_agente": {}}, "agentes": {}, "posicoes": [], "competicao": comp})
+    assert "🏆 COMPETIÇÃO" in text and "1. v3_a [novo] +2.00" in text and "Antigos -2.00 x Novos +2.00" in text

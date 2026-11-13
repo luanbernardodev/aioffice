@@ -44,9 +44,11 @@ SYSTEM_PROMPT = (
     "AÇÃO: uma recomendação objetiva\n"
     "LIÇÃO: uma linha com algo novo que valha lembrar nas próximas auditorias, ou 'nenhuma'\n"
     "Use só os números recebidos; não invente dados. CRÍTICO = posição sem SL ou perda relevante da conta.\n"
-    "Contexto do sistema: os agentes goldflip, goldnight, btcflip, capitulation, rsi20, agente_rsi7_h1 e "
-    "us100_rsi2_h1 saem por stop móvel (o us100_rsi2_h1 também por sinal de RSI) e "
-    "operam SEM take profit por design, então TP = 0 neles não é problema; SL = 0 é sempre problema. "
+    "Contexto do sistema: goldflip, goldnight_v2, rsi20 e os agentes v3_* (exceto v3_us500_sweep_h1) saem por "
+    "stop móvel ou por tempo e operam SEM take profit por design, então TP = 0 neles não é problema; "
+    "SL = 0 é sempre problema. O sistema legado (Setores 1-6) foi removido e não entra nos dados. "
+    "Há uma competição (bloco 'competicao' do JSON) entre agentes antigos e os 5 novos v3_*: comente o placar "
+    "sem declarar vencedor antes do fim e lembrando que uma semana é amostra pequena. "
     "Com menos de 20 trades de um agente, trate o resultado como amostra pequena, não como conclusão."
 )
 
@@ -152,6 +154,7 @@ def collect(mt5: Any, hours: float, names: Dict[int, str], server_time: str, now
     history = closed_trades(raw_all, datetime(2000, 1, 1, tzinfo=timezone.utc), names, server_time)
     return {"gerado_utc": now.strftime("%Y-%m-%d %H:%M"), "janela_horas": hours,
             "agentes": agents_table(trades, history, positions, roster or {}),
+            "competicao": competition_table(history, comp) if (comp := competition_config()) else None,
             "conta": {"login": int(acc.login), "demo": int(acc.trade_mode) == 0, "saldo": float(acc.balance),
                       "equity": float(acc.equity), "margem_livre": float(acc.margin_free),
                       "pnl_flutuante": round(float(acc.equity) - float(acc.balance), 2),
@@ -215,6 +218,38 @@ def agents_table(window: List[Dict[str, Any]], history: List[Dict[str, Any]], po
                      "abertas": sum(1 for p in positions if p["agente"] == name),
                      "pnl_aberto": round(sum(p["pnl"] for p in positions if p["agente"] == name), 2)}
     return out
+
+
+# ----------------------------------------------------------------- competição (agentes antigos x novos v3)
+COMPETITION_FILE = ROOT / "config" / "agente_v3_competicao.yaml"
+
+
+def competition_config(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    import yaml
+    try:
+        data = yaml.safe_load((path or COMPETITION_FILE).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    c = data.get("competicao")
+    return c if isinstance(c, dict) and c.get("inicio_utc") else None
+
+
+def competition_table(history: List[Dict[str, Any]], comp: Dict[str, Any]) -> Dict[str, Any]:
+    """Placar desde inicio_utc (até fim_utc): resultado, trades, acerto, PF e drawdown de cada participante."""
+    ini, fim = str(comp["inicio_utc"])[:16], str(comp.get("fim_utc") or "9999")[:16]
+    turma = {**{n: "antigo" for n in comp.get("antigos") or []}, **{n: "novo" for n in comp.get("novos") or []}}
+    rows = []
+    for name, grupo in turma.items():
+        pnls = [t["pnl"] for t in history if t["agente"] == name and ini <= t["fechado_utc"] < fim]
+        eq, peak, dd = 0.0, 0.0, 0.0
+        for v in pnls:
+            eq += v
+            peak = max(peak, eq)
+            dd = max(dd, peak - eq)
+        rows.append({"agente": name, "grupo": grupo, **_stats(pnls), "max_dd": round(dd, 2)})
+    rows.sort(key=lambda r: (r["pnl"], r["trades"]), reverse=True)
+    grupos = {g: round(sum(r["pnl"] for r in rows if r["grupo"] == g), 2) for g in ("antigo", "novo")}
+    return {"inicio_utc": ini, "fim_utc": comp.get("fim_utc"), "placar": rows, "total_por_grupo": grupos}
 
 
 def needs_ai(data: Dict[str, Any]) -> bool:
@@ -333,6 +368,16 @@ def local_report(data: Dict[str, Any]) -> str:
                                       for k, v in data["resumo"]["por_agente"].items()}
     for name, a in agents.items():
         lines += _agent_line(name, a)
+    comp = data.get("competicao")
+    if comp:
+        fim = f" até {str(comp['fim_utc'])[:16]}" if comp.get("fim_utc") else ""
+        g = comp["total_por_grupo"]
+        lines += ["", f"🏆 COMPETIÇÃO (desde {comp['inicio_utc']} UTC{fim})",
+                  f"Antigos {g['antigo']:+.2f} x Novos {g['novo']:+.2f}"]
+        for i, r in enumerate(comp["placar"], 1):
+            lines.append(f"{i}. {r['agente']} [{r['grupo']}] {r['pnl']:+.2f} | {r['trades']} trades" + (
+                f" | acerto {r['win_rate_pct']:.0f}% | PF {_pf(r['profit_factor'])} | DD {r['max_dd']:.2f}"
+                if r["trades"] else ""))
     lines += ["", f"📌 POSIÇÕES ABERTAS ({len(data['posicoes'])})"]
     if not data["posicoes"]:
         lines.append("nenhuma")

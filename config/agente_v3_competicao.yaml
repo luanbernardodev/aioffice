@@ -1,0 +1,87 @@
+# Agentes v3 — competição de 16 a 20/11/2026 contra os agentes antigos.
+# Origem: grade de 11.844 estratégias (backtest/agentes_v3/grid.py, custo real de ticks em GOLD/BTC),
+# 77 aprovadas nos 5 critérios; finalistas analisados em backtest/agentes_v3/finalistas.py.
+# Código: agents/v3_agent.py (mesmas regras do backtest) + agents/v3_signals.py. Processo: start_v3.bat.
+# Guardas FIXAS no código: só DEMO, 1 posição por agente, magic exclusivo. Aqui: limite de perda por agente
+# (zera e desliga, gravado em state/<nome>.json), kill_switch (relido a cada 60 s) e spread máximo de entrada.
+
+competicao:
+  inicio_utc: "2026-11-16 00:00"          # segunda
+  fim_utc: "2026-11-21 00:00"             # inclui a sexta inteira
+  antigos: ["engine A2", "engine A3", "goldflip", "sweep48", "rsi20", "goldnight_v2"]
+  novos: ["v3_gold_chan_m15", "v3_us500_sweep_h1", "v3_us500_st_h1", "v3_us500_ema_h1", "v3_btc_rsi_h1"]
+
+v3_gold_chan_m15:                          # família goldnight/goldflip: SAR chandelier por fechamento, madrugada
+  name: v3_gold_chan_m15
+  enabled: true
+  kill_switch: false
+  symbol: GOLD
+  magic: 20261117
+  lot: min
+  timeframe: M15
+  signal: {family: CHAN, k: 2.0, filter: none, session: night}
+  exit: {sl: 1.5, trail: 0, act: 0, tp: 0}
+  max_bars: 96                             # 24 h
+  max_spread: 1.5                          # mediana real 0.55
+  loss_limit_usd: 40
+  # backtest 01-11/2026: 235 trades, PF 2.04 (IS 2.25 / OOS 1.68), +2545, DD 211 (> saldo!), acerto 22%, risco ~US$12
+
+v3_us500_sweep_h1:                         # família sweep48 no índice: varre a mínima/máxima de 48 H1 e fecha de volta
+  name: v3_us500_sweep_h1
+  enabled: true
+  kill_switch: false
+  symbol: US500Cash
+  magic: 20261118
+  lot: min
+  timeframe: H1
+  signal: {family: SWEEP, n: 48, filter: none, session: all}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 3.0}
+  max_bars: 96
+  max_spread: 2.4                          # spread ao vivo 0.8
+  loss_limit_usd: 30
+  # backtest 06/2025-11/2026: 227 trades, PF 1.40 (IS 1.28 / OOS 1.61), +186, DD 41, acerto 57%, risco ~US$4.6
+
+v3_us500_st_h1:                            # família btcflip no índice: SuperTrend(10,3) vira a favor da EMA200, sessão NY
+  name: v3_us500_st_h1
+  enabled: true
+  kill_switch: false
+  symbol: US500Cash
+  magic: 20261119
+  lot: min
+  timeframe: H1
+  signal: {family: ST, p: 10, m: 3.0, filter: ema200, session: ny}
+  exit: {sl: 1.5, trail: 1.5, act: 1.0, tp: 0}
+  max_bars: 96
+  max_spread: 2.4
+  loss_limit_usd: 20
+  # backtest: 55 trades (amostra pequena), PF 2.68 (IS 1.95 / OOS 4.69), +82, DD 16, 13/16 meses positivos, risco ~US$2.5
+
+v3_us500_ema_h1:                           # cruzamento EMA 20/50 na sessão NY com trailing
+  name: v3_us500_ema_h1
+  enabled: true
+  kill_switch: false
+  symbol: US500Cash
+  magic: 20261120
+  lot: min
+  timeframe: H1
+  signal: {family: EMAX, f: 20, s: 50, session: ny}
+  exit: {sl: 1.5, trail: 1.5, act: 0, tp: 0}
+  max_bars: 96
+  max_spread: 2.4
+  loss_limit_usd: 20
+  # backtest: 56 trades, PF 2.00 (IS 2.50 / OOS 1.53), +59, DD 13, risco ~US$2.5
+
+v3_btc_rsi_h1:                             # família rsi20: RSI(14) H1 entra na zona 25/75, compra e venda, trailing 3 ATR
+  name: v3_btc_rsi_h1
+  enabled: true
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261121
+  lot: min
+  timeframe: H1
+  signal: {family: RSIX, x: 25, side: both, filter: none, session: all}
+  exit: {sl: 1.5, trail: 3.0, act: 0, tp: 0}
+  max_bars: 96
+  max_spread: 150                          # mediana real 50
+  loss_limit_usd: 40
+  # backtest 11/2025-11/2026: 101 trades, PF 1.52 (IS 1.55 / OOS 1.45), +239, DD 96, sem os 3 maiores +57
