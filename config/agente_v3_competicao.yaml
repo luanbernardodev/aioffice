@@ -390,7 +390,7 @@ of_btc_13_rsipb_conf_w3:
   lot: min
   timeframe: H1
   signal: {family: RSIPB, n: 7, lvl: 30, filter: ma200, session: us, of_filter: conf_w3}
-  exit: {sl: 1.5, trail: 0, act: 0, tp: 0.75}
+  exit: {sl: 1.5, trail: 1.5, act: 0.5, tp: 0.75}   # 15/11: trailing adotado (trailing_test.py: PF IS 1.41->1.74, OOS 1.57 igual)
   max_bars: 96
   max_spread: 150
   loss_limit_usd: 20
