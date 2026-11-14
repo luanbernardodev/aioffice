@@ -1,6 +1,8 @@
-# Agentes v3 — competição de 16 a 20/11/2026 contra os agentes antigos.
+# Agentes v3/v4 — competição de 16 a 20/11/2026 contra os agentes antigos.
 # Origem: grade de 11.844 estratégias (backtest/agentes_v3/grid.py, custo real de ticks em GOLD/BTC),
 # 77 aprovadas nos 5 critérios; finalistas analisados em backtest/agentes_v3/finalistas.py.
+# 14/11: exigência de acerto >= 60% -> grade v4 (backtest/agentes_v3/grid4.py), +56.448 estratégias com saídas por
+# alvo; 45 aprovadas (GOLD 18, US500 27, BTC 0 nos 6 critérios). Os 5 agentes v4 abaixo substituem os v3 na competição.
 # Código: agents/v3_agent.py (mesmas regras do backtest) + agents/v3_signals.py. Processo: start_v3.bat.
 # Guardas FIXAS no código: só DEMO, 1 posição por agente, magic exclusivo. Aqui: limite de perda por agente
 # (zera e desliga, gravado em state/<nome>.json), kill_switch (relido a cada 60 s) e spread máximo de entrada.
@@ -9,11 +11,11 @@ competicao:
   inicio_utc: "2026-11-16 00:00"          # segunda
   fim_utc: "2026-11-21 00:00"             # inclui a sexta inteira
   antigos: ["engine A2", "engine A3", "goldflip", "sweep48", "rsi20", "goldnight_v2"]
-  novos: ["v3_gold_chan_m15", "v3_us500_sweep_h1", "v3_us500_st_h1", "v3_us500_ema_h1", "v3_btc_rsi_h1"]
+  novos: ["v4_gold_rsipb_m5", "v4_gold_rsix_m5", "v4_us500_st_h1", "v4_us500_bb_h1", "v4_btc_rsipb_h1"]
 
 v3_gold_chan_m15:                          # família goldnight/goldflip: SAR chandelier por fechamento, madrugada
   name: v3_gold_chan_m15
-  enabled: true
+  enabled: false                 # 14/11: substituído (acerto < 60% no backtest)
   kill_switch: false
   symbol: GOLD
   magic: 20261117
@@ -28,7 +30,7 @@ v3_gold_chan_m15:                          # família goldnight/goldflip: SAR ch
 
 v3_us500_sweep_h1:                         # família sweep48 no índice: varre a mínima/máxima de 48 H1 e fecha de volta
   name: v3_us500_sweep_h1
-  enabled: true
+  enabled: false                 # 14/11: substituído (acerto < 60% no backtest)
   kill_switch: false
   symbol: US500Cash
   magic: 20261118
@@ -43,7 +45,7 @@ v3_us500_sweep_h1:                         # família sweep48 no índice: varre 
 
 v3_us500_st_h1:                            # família btcflip no índice: SuperTrend(10,3) vira a favor da EMA200, sessão NY
   name: v3_us500_st_h1
-  enabled: true
+  enabled: false                 # 14/11: substituído (acerto < 60% no backtest)
   kill_switch: false
   symbol: US500Cash
   magic: 20261119
@@ -58,7 +60,7 @@ v3_us500_st_h1:                            # família btcflip no índice: SuperT
 
 v3_us500_ema_h1:                           # cruzamento EMA 20/50 na sessão NY com trailing
   name: v3_us500_ema_h1
-  enabled: true
+  enabled: false                 # 14/11: substituído (acerto < 60% no backtest)
   kill_switch: false
   symbol: US500Cash
   magic: 20261120
@@ -73,7 +75,7 @@ v3_us500_ema_h1:                           # cruzamento EMA 20/50 na sessão NY 
 
 v3_btc_rsi_h1:                             # família rsi20: RSI(14) H1 entra na zona 25/75, compra e venda, trailing 3 ATR
   name: v3_btc_rsi_h1
-  enabled: true
+  enabled: false                 # 14/11: substituído (acerto < 60% no backtest)
   kill_switch: false
   symbol: BTCUSD
   magic: 20261121
@@ -85,3 +87,80 @@ v3_btc_rsi_h1:                             # família rsi20: RSI(14) H1 entra na
   max_spread: 150                          # mediana real 50
   loss_limit_usd: 40
   # backtest 11/2025-11/2026: 101 trades, PF 1.52 (IS 1.55 / OOS 1.45), +239, DD 96, sem os 3 maiores +57
+
+# ===================================================================== v4: acerto >= 60% (grade v4)
+v4_gold_rsipb_m5:                          # RSI(7) volta acima de 20 a favor da MA200, M5 Londres/NY
+  name: v4_gold_rsipb_m5
+  enabled: true
+  kill_switch: false
+  symbol: GOLD
+  magic: 20261122
+  lot: min
+  timeframe: M5
+  signal: {family: RSIPB, n: 7, lvl: 20, filter: ma200, session: day}
+  exit: {sl: 2.0, trail: 0, act: 0, tp: 0.75}
+  max_bars: 24
+  max_spread: 1.5
+  loss_limit_usd: 40
+  # backtest 01-11/2026: 175 trades, acerto 74.8% IS / 73.4% OOS, PF 1.53/1.56, spread x2: 71% PF 1.30, DD 77
+
+v4_gold_rsix_m5:                           # RSI(14) entra abaixo de 30, só compra, acima da MA200, M5 24h
+  name: v4_gold_rsix_m5
+  enabled: true
+  kill_switch: false
+  symbol: GOLD
+  magic: 20261123
+  lot: min
+  timeframe: M5
+  signal: {family: RSIX, x: 30, side: long, filter: ma200, session: all}
+  exit: {sl: 2.0, trail: 0, act: 0, tp: 1.5}
+  max_bars: 24
+  max_spread: 1.5
+  loss_limit_usd: 40
+  # backtest: 91 trades, acerto 71.9% IS / 64.7% OOS, PF 1.84/1.68, spread x2: 62% PF 1.61, DD 64, pior -46 (gap)
+
+v4_us500_st_h1:                            # SuperTrend(10,3) vira, sessão NY, alvo curto
+  name: v4_us500_st_h1
+  enabled: true
+  kill_switch: false
+  symbol: US500Cash
+  magic: 20261124
+  lot: min
+  timeframe: H1
+  signal: {family: ST, p: 10, m: 3.0, filter: none, session: ny}
+  exit: {sl: 2.0, trail: 0, act: 0, tp: 0.75}
+  max_bars: 96
+  max_spread: 2.4
+  loss_limit_usd: 20
+  # backtest 06/2025-11/2026: 124 trades, acerto 78.7% IS / 79.6% OOS, PF 1.58/1.45, spread x2: 78% PF 1.48, DD 17
+
+v4_us500_bb_h1:                            # fecha de volta para dentro da Bollinger(20, 2.5) a favor da MA200
+  name: v4_us500_bb_h1
+  enabled: true
+  kill_switch: false
+  symbol: US500Cash
+  magic: 20261125
+  lot: min
+  timeframe: H1
+  signal: {family: BB, k: 2.5, filter: ma200, session: all}
+  exit: {sl: 4.0, trail: 0, act: 0, tp: 0.5}
+  max_bars: 96
+  max_spread: 2.4
+  loss_limit_usd: 20
+  # backtest: 74 trades (amostra pequena), acerto 90.7% IS / 93.5% OOS, PF 1.81/2.27, spread x2: 92% PF 1.97, DD 10
+
+v4_btc_rsipb_h1:                           # RSI(3) volta acima de 10 a favor da MA200, H1
+  name: v4_btc_rsipb_h1
+  enabled: true
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261126
+  lot: min
+  timeframe: H1
+  signal: {family: RSIPB, n: 3, lvl: 10, filter: ma200, session: all}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 0.5}
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 40
+  # backtest 11/2025-11/2026: 100 trades, acerto 91.2% IS / 93.0% OOS, PF 1.68/2.55, DD 29
+  # FORA do critério 6: risco mediano US$13.5 (> US$12); spread x2 PF 1.09. Nenhuma estratégia de BTC passou nos 6.

@@ -172,16 +172,17 @@ def test_competition_config_is_consistent(cfg):
     import agents.auditor_mt5 as aud
     from agents.v3_agent import load_agents_config
     v3 = load_agents_config()
-    assert len(v3) == 5 and all(g["enabled"] for g in v3.values())
+    on = {k: g for k, g in v3.items() if g["enabled"]}
+    assert len(on) == 5 and all(k.startswith("v4_") for k in on)          # v3 (acerto < 60%) desligados
     magics = [int(g["magic"]) for g in v3.values()]
     others = [int(v["magic"]) for k, v in cfg.items() if isinstance(v, dict) and "magic" in v]
     others += [a["magic"] for a in aud.standalone_agents() if a["magic"] not in magics]
-    assert len(set(magics)) == 5 and not set(magics) & set(others)
+    assert len(set(magics)) == len(v3) and not set(magics) & set(others)
     for g in v3.values():                                  # especificação válida para o código de sinais
         V.signal(V.indicators(random_walk(n=700, seed=1)), g["signal"])
         assert g["timeframe"] in ("M5", "M15", "H1") and g["loss_limit_usd"] > 0 and g["max_spread"] > 0
     comp = aud.competition_config()
     roster = aud.agent_roster(cfg)
-    assert set(comp["novos"]) == {g["name"] for g in v3.values()}
+    assert set(comp["novos"]) == {g["name"] for g in on.values()}
     assert set(comp["antigos"]) | set(comp["novos"]) <= set(roster)
     assert all(roster[n]["ligado"] for n in comp["antigos"] + comp["novos"])

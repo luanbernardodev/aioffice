@@ -27,8 +27,8 @@ def main() -> int:
     if lock is None:
         logging.error("%s já está rodando nesta máquina; esta cópia não inicia.", NAME)
         return EXIT_NO_RESTART
-    sections = {k: v for k, v in load_agents_config().items() if v.get("enabled")}
-    if not sections:
+    sections = load_agents_config()             # desligados também entram: zeram posição aberta e não abrem novas
+    if not any(v.get("enabled") for v in sections.values()):
         logging.warning("nenhum agente v3 ligado: processo não iniciado.")
         return EXIT_NO_RESTART
     import MetaTrader5 as mt5

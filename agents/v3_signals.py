@@ -58,9 +58,9 @@ def indicators(df: pd.DataFrame) -> Dict[str, Any]:
     x["atr"] = ind.atr(df, 14).to_numpy(float)
     for n in (100, 200, 300):
         x[f"ma{n}"] = c.rolling(n).mean().to_numpy(float)
-    for n in (9, 20, 21, 50, 200):
+    for n in (5, 9, 13, 20, 21, 50, 200):
         x[f"ema{n}"] = c.ewm(span=n, adjust=False).mean().to_numpy(float)
-    for n in (2, 7, 14):
+    for n in (2, 3, 7, 14):
         x[f"rsi{n}"] = ind.rsi(c, n).to_numpy(float)
     return x
 
