@@ -8,3 +8,4 @@ __pycache__/
 data/
 logs/
 state/
+backtest/orderflow/*.pkl
