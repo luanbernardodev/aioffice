@@ -41,6 +41,13 @@ def load_agents_config(path: Optional[Path] = None) -> Dict[str, Dict[str, Any]]
     return {k: v for k, v in data.items() if isinstance(v, dict) and "magic" in v}
 
 
+def load_group_caps(path: Optional[Path] = None) -> Dict[str, int]:
+    """grupos: {nome: máximo de posições simultâneas} (bloco `grupos` do YAML)."""
+    with open(path or CONFIG_PATH, "r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    return {str(k): int(v) for k, v in (data.get("grupos") or {}).items()}
+
+
 class V3Agent:
     def __init__(self, mt5: Any, cfg: Dict[str, Any], section: str, g: Dict[str, Any],
                  state_dir: Optional[Path] = None, clock=None) -> None:
@@ -61,6 +68,9 @@ class V3Agent:
         self.last_head = 0
         self.last_close_try: Dict[str, float] = {}
         self.realized, self.realized_at = 0.0, 0.0
+        self.group_full = None                           # definido pelo runner: True se o grupo já está no limite
+        from orderflow.live import STATE_FILE as _OF_STATE
+        self.of_path = _OF_STATE
 
     # ------------------------------------------------------------ persistência e log
     def _load(self) -> None:
@@ -266,6 +276,7 @@ class V3Agent:
         bar = int(df["server_time"].iat[-1])
         if bar == int(self.state.get("last_bar") or 0):
             return
+        prev_bar = int(self.state.get("last_bar") or 0)
         self.state["last_bar"] = bar
         self._save()
         positions = self._positions()
@@ -281,6 +292,21 @@ class V3Agent:
         age = float(tick.time) - (bar + self.bar_min * 60)
         why = ("spread %.5f > %.5f" % (spread, mx)) if mx and spread > mx else \
               ("sinal atrasado %.0fs" % age) if age > float(self.g.get("signal_max_age_seconds", 120)) else ""
+        of = str(self.spec.get("of_filter", "none"))
+        if not why and of != "none":                     # filtro de orderflow da Binance (feed run_orderflow_feed.py)
+            from orderflow import live as OL
+            hour_ms = int((pd.Timestamp(df["time"].iat[-1]).tz_localize(None) - pd.Timestamp("1970-01-01"))
+                          // pd.Timedelta(milliseconds=1))
+            ok, reason = OL.allow_now(OL.load_features(self.of_path), hour_ms, side, of)
+            if ok is None and age < float(self.g.get("of_wait_seconds", 100)):
+                self.state["last_bar"] = prev_bar        # o feed ainda não fechou esta hora: tenta de novo em instantes
+                self._save()
+                self.last_head = 0
+                return
+            if not ok:
+                why = f"orderflow: {reason}"
+        if not why and self.group_full is not None and self.group_full():
+            why = "limite de posições simultâneas do grupo"
         self._csv("SIGNAL", side=side, bar_utc=bar, A=round(a0, 5), spread=round(spread, self.digits),
                   detail=f"ignorado: {why}" if why else "")
         log.info("%s SINAL %s barra=%s A=%.5f%s", self.tag, "COMPRA" if side == 1 else "VENDA", bar, a0,

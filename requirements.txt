@@ -10,3 +10,4 @@ schedule
 tzdata
 pyyaml
 pytest
+websockets>=12

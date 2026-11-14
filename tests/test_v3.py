@@ -173,7 +173,15 @@ def test_competition_config_is_consistent(cfg):
     from agents.v3_agent import load_agents_config
     v3 = load_agents_config()
     on = {k: g for k, g in v3.items() if g["enabled"]}
-    assert len(on) == 5 and all(k.startswith("v4_") for k in on)          # v3 (acerto < 60%) desligados
+    assert {k for k in on if k.startswith("v4_")} == {"v4_gold_rsipb_m5", "v4_gold_rsix_m5", "v4_us500_st_h1",
+                                                      "v4_us500_bb_h1", "v4_btc_rsipb_h1"}
+    of = {k: g for k, g in on.items() if k.startswith("of_btc_")}
+    assert len(on) == 5 + len(of) and len(of) == 15                       # v3 (acerto < 60%) desligados
+    from agents.v3_agent import load_group_caps
+    from orderflow.filters import FILTERS
+    assert load_group_caps() == {"orderflow_btc": 4}
+    assert all(g["grupo"] == "orderflow_btc" and g["symbol"] == "BTCUSD" and g["timeframe"] == "H1"
+               and g["signal"]["of_filter"] in FILTERS and g["signal"]["of_filter"] != "none" for g in of.values())
     magics = [int(g["magic"]) for g in v3.values()]
     others = [int(v["magic"]) for k, v in cfg.items() if isinstance(v, dict) and "magic" in v]
     others += [a["magic"] for a in aud.standalone_agents() if a["magic"] not in magics]
@@ -186,3 +194,103 @@ def test_competition_config_is_consistent(cfg):
     assert set(comp["novos"]) == {g["name"] for g in on.values()}
     assert set(comp["antigos"]) | set(comp["novos"]) <= set(roster)
     assert all(roster[n]["ligado"] for n in comp["antigos"] + comp["novos"])
+
+
+
+# ------------------------------------------------------------------ portão de orderflow e limite do grupo
+def _of_file(tmp_path, hour_ms, complete=True, delta=5.0):
+    import json
+    hours = [hour_ms - k * 3_600_000 for k in range(120, -1, -1)]
+    bars = [{"hour": h, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "buy": 1.0, "sell": 1.0,
+             "delta": (delta if h == hour_ms else 0.1 * ((i % 7) - 3)), "vol": 2.0, "poc": 100.0, "vah": 100.5,
+             "val": 99.5, "stk_buy": 0, "stk_sell": 0, "low_share": 0.2, "high_share": 0.2,
+             "complete": complete if h == hour_ms else False} for i, h in enumerate(hours)]
+    f = tmp_path / "of.json"
+    f.write_text(json.dumps({"bars": bars}))
+    return f
+
+
+def _of_agent(tmp_path, monkeypatch, mt5, of_filter="delta_agree"):
+    a = agent(tmp_path, monkeypatch, mt5)
+    a.spec = {**a.spec, "of_filter": of_filter}
+    monkeypatch.setattr(V, "entry_signal_now", lambda df, spec, m: (1, 2.0))
+    return a
+
+
+def _bar_hour_ms(r):
+    from engine.features import server_to_utc
+    t = server_to_utc(np.array([int(r["time"][-1])]), "ny_plus_7").iloc[0]
+    return int((t.tz_localize(None) - pd.Timestamp("1970-01-01")) // pd.Timedelta(milliseconds=1))
+
+
+def test_of_gate_waits_for_feed_then_enters(tmp_path, monkeypatch):
+    r = rates()
+    mt5 = FakeMT5(r)
+    a = _of_agent(tmp_path, monkeypatch, mt5)
+    a.of_path = tmp_path / "nao_existe.json"
+    a.step()                                              # feed ainda sem a barra e sinal novo: espera, sem ordem
+    assert not mt5.sent and a.state["last_bar"] == 0 and a.last_head == 0
+    a.of_path = _of_file(tmp_path, _bar_hour_ms(r), delta=5.0)
+    a.step()                                              # delta a favor da compra: entra
+    assert mt5.sent and mt5.sent[-1]["type"] == 0
+
+
+def test_of_gate_blocks_against_and_incomplete(tmp_path, monkeypatch):
+    r = rates()
+    mt5 = FakeMT5(r)
+    a = _of_agent(tmp_path, monkeypatch, mt5)
+    a.of_path = _of_file(tmp_path, _bar_hour_ms(r), delta=-5.0)
+    a.step()
+    assert not mt5.sent and a.state["last_bar"] != 0       # filtro contra: ignora a barra (não reabre)
+    mt5.head += 300
+    a.state["last_bar"] = 0
+    a.of_path = _of_file(tmp_path, _bar_hour_ms(r), complete=False, delta=5.0)
+    a.step()
+    assert not mt5.sent                                    # barra incompleta no feed: nunca aprova
+
+
+def test_group_cap_blocks_entry(tmp_path, monkeypatch):
+    mt5 = FakeMT5(rates())
+    a = agent(tmp_path, monkeypatch, mt5)
+    monkeypatch.setattr(V, "entry_signal_now", lambda df, spec, m: (1, 2.0))
+    a.group_full = lambda: True
+    a.step()
+    assert not mt5.sent
+
+
+# ------------------------------------------------------------------ feed ao vivo (sem rede)
+class FakeSession:
+    def __init__(self, kline_vol=3.0, trades=None):
+        self.kline_vol, self.trades = kline_vol, trades or []
+
+    def get(self, url, params=None, timeout=None):
+        if url.endswith("/klines"):
+            h = params.get("startTime", 0)
+            data = [[h, "100", "102", "99", "101", str(self.kline_vol), 0, "0", 0, str(self.kline_vol / 2)]]
+        else:
+            data, self.trades = self.trades, []
+        return types.SimpleNamespace(json=lambda: data, raise_for_status=lambda: None)
+
+
+def test_feed_builds_complete_bar_and_detects_partial(tmp_path):
+    from orderflow.live import Feed, load_features
+    f = Feed(session=FakeSession(kline_vol=3.0), state_file=tmp_path / "of.json")
+    h0 = 1_800_000_000_000 // 3_600_000 * 3_600_000
+    f.on_trade(1, h0 + 10, 100.0, 1.0, False)               # feed começou no meio da hora: barra incompleta
+    f.on_trade(2, h0 + 3_600_000 + 5, 100.0, 1.0, False)    # nova hora (completa)
+    f.on_trade(3, h0 + 3_600_000 + 9, 120.0, 2.0, True)
+    f.on_trade(3, h0 + 3_600_000 + 9, 120.0, 2.0, True)     # id repetido: ignorado
+    f.on_trade(4, h0 + 7_200_000 + 1, 101.0, 0.5, False)    # fecha a segunda hora
+    df = load_features(tmp_path / "of.json")
+    assert df["complete"].tolist() == [False, True]
+    row = df.iloc[-1]
+    assert row["delta"] == pytest.approx(0.0) and row["poc"] == pytest.approx(125.0)  # kline: compra 1.5, venda 1.5
+
+
+def test_feed_gap_fill_continues_from_last_id(tmp_path):
+    from orderflow.live import Feed
+    sess = FakeSession(trades=[{"a": 6, "T": 1_000, "p": "100", "q": "1", "m": False},
+                               {"a": 7, "T": 1_001, "p": "100", "q": "1", "m": True}])
+    f = Feed(session=sess, state_file=tmp_path / "of.json")
+    f.on_trade(5, 999, 100.0, 1.0, False)
+    assert f.gap_fill() == 2 and f.last_id == 7 and f.levels[10] == [2.0, 1.0]

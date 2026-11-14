@@ -65,7 +65,7 @@ DEALS = [deal(1, 0, 0, 20261107, 0.0, SRV(21, 0), "US500Cash", "A2|FIB_LIMIT_0.5
 
 def test_names_from_config(cfg):
     n = aud.agent_names(cfg)
-    assert n[20261107] == "engine" and n[20261113] == "goldnight" and n[20261110] == "sweep48" and n[0] == "manual"
+    assert n[20261107] == "engine" and n[20261113] == "goldnight" and n[20261110] == "sweep48" and 0 not in n
 
 
 def test_collect_window_stats_and_engine_split(cfg):
@@ -83,7 +83,7 @@ def test_ai_only_with_trades_or_missing_sl(cfg):
     quiet = aud.collect(FakeMT5(), 24, names, "ny_plus_7", NOW)
     assert not aud.needs_ai(quiet)
     p = types.SimpleNamespace(ticket=9, symbol="GOLD", type=0, volume=0.01, price_open=4100.0, sl=0.0, tp=0.0,
-                              profit=-1.0, swap=0.0, magic=0, comment="")
+                              profit=-1.0, swap=0.0, magic=20261108, comment="")
     assert aud.needs_ai(aud.collect(FakeMT5(positions=[p]), 24, names, "ny_plus_7", NOW))
 
 
@@ -95,7 +95,8 @@ def test_run_calls_claude_saves_lesson_and_sends(cfg):
     kw = claude.calls[0]
     assert kw["model"] == "claude-haiku-5-5" and kw["max_tokens"] == 600
     assert "madrugada com spread alto" in aud.MEMORY_FILE.read_text(encoding="utf-8")
-    assert len(sent) == 1 and len(sent[0]["text"]) <= 4000 and "STATUS: ATENÇÃO" in out
+    assert sent and all(len(m["text"]) <= 4000 for m in sent) and "STATUS: ATENÇÃO" in out
+    assert "STATUS: ATENÇÃO" in sent[-1]["text"]                     # relatório longo vai em partes (1/n)...
 
 
 def test_lesson_nenhuma_is_not_saved(cfg):
@@ -155,8 +156,8 @@ def test_report_shows_agents_without_trades_and_cumulative(cfg):
     data = aud.collect(FakeMT5(deals=DEALS), 20, aud.agent_names(cfg), "ny_plus_7", NOW, roster=aud.agent_roster(cfg))
     ag = data["agentes"]
     assert ag["engine A3"]["janela"]["trades"] == 0                  # sem trade na janela, mas listado
-    assert ag["goldnight"]["acumulado"]["trades"] == 2               # o trade fora da janela entra no acumulado
-    assert ag["goldnight"]["janela"]["trades"] == 1
+    assert "goldnight" not in ag                                     # desligado e sem posição: fora da lista
+    assert ag["goldflip"]["janela"]["trades"] == 1 and ag["goldflip"]["acumulado"]["trades"] == 1
     text = aud.local_report(data)
     assert "• engine A3 [US500Cash]\n   Janela: sem trades fechados" in text
     assert "\n\n🤖 AGENTES\n" in text and "\n\n📌 POSIÇÕES ABERTAS (0)\nnenhuma" in text
@@ -216,3 +217,22 @@ def test_competition_leaderboard_counts_only_from_start():
                              "equity": 1, "margem_livre": 1, "dd_flutuante_pct": 0}, "resumo": {"total": {"trades": 0,
                              "pnl": 0}, "por_agente": {}}, "agentes": {}, "posicoes": [], "competicao": comp})
     assert "🏆 COMPETIÇÃO" in text and "1. v3_a [novo] +2.00" in text and "Antigos -2.00 x Novos +2.00" in text
+
+
+def test_manual_magic_out_of_sample_and_only_active_agents_listed(cfg):
+    manual = [deal(8, 0, 0, 0, 0.0, SRV(20, 0)), deal(8, 1, 1, 0, -40.0, SRV(20, 30))]
+    pos = [types.SimpleNamespace(ticket=6, symbol="BRENTCash", type=0, volume=0.1, price_open=1.0, sl=0.0, tp=0.0,
+                                 profit=-2.0, swap=0.0, magic=0, comment="")]
+    data = aud.collect(FakeMT5(positions=pos, deals=DEALS + manual), 20, aud.agent_names(cfg), "ny_plus_7", NOW,
+                       roster=aud.agent_roster(cfg))
+    assert 8 not in [t["posicao"] for t in data["trades"]] and data["posicoes"] == []
+    assert "manual" not in data["agentes"]
+    roster = aud.agent_roster(cfg)
+    assert set(data["agentes"]) == {n for n, r in roster.items() if r["ligado"]}
+
+
+def test_no_configured_agent_uses_magic_zero(cfg):
+    from agents.v3_agent import load_agents_config
+    magics = [int(v["magic"]) for k, v in cfg.items() if isinstance(v, dict) and "magic" in v]
+    magics += [a["magic"] for a in aud.standalone_agents()] + [int(g["magic"]) for g in load_agents_config().values()]
+    assert 0 not in magics and aud.MANUAL_MAGIC in aud.EXCLUDED_MAGICS

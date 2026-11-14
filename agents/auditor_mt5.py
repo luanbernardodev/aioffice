@@ -31,8 +31,10 @@ MODEL = "claude-haiku-5-5"
 MAX_TOKENS = 600
 TG_LIMIT = 4000
 LEGACY_MAGIC = 777777
-# Fora da amostra: Setores 1-6 (legado, código removido em 13/11). Não entram em trades, totais nem agentes.
-EXCLUDED_MAGICS = {LEGACY_MAGIC}
+MANUAL_MAGIC = 0
+# Fora da amostra: Setores 1-6 (legado, código removido em 13/11) e operações manuais/externas (magic 0, 14/11).
+# Não entram em trades, totais, posições nem na lista de agentes.
+EXCLUDED_MAGICS = {LEGACY_MAGIC, MANUAL_MAGIC}
 
 SYSTEM_PROMPT = (
     "Você é o auditor de risco de um sistema de trading automatizado (conta DEMO na XM, MT5). "
@@ -46,7 +48,9 @@ SYSTEM_PROMPT = (
     "Use só os números recebidos; não invente dados. CRÍTICO = posição sem SL ou perda relevante da conta.\n"
     "Contexto do sistema: goldflip, goldnight_v2, rsi20 e os agentes v3_* (exceto v3_us500_sweep_h1) saem por "
     "stop móvel ou por tempo e operam SEM take profit por design, então TP = 0 neles não é problema; "
-    "SL = 0 é sempre problema. O sistema legado (Setores 1-6) foi removido e não entra nos dados. "
+    "SL = 0 é sempre problema. O sistema legado (Setores 1-6) e as operações manuais (magic 0) ficam fora dos dados. "
+    "Os agentes of_btc_* (BTC H1 com filtro de orderflow da Binance) dividem um limite de 4 posições simultâneas; "
+    "sinal ignorado por esse limite ou por falta do feed de orderflow não é falha. "
     "Há uma competição (bloco 'competicao' do JSON) entre agentes antigos e os 5 novos v3_*: comente o placar "
     "sem declarar vencedor antes do fim e lembrando que uma semana é amostra pequena. "
     "Com menos de 20 trades de um agente, trate o resultado como amostra pequena, não como conclusão."
@@ -69,7 +73,7 @@ class ReadOnlyMT5:
 
 # ----------------------------------------------------------------- nomes dos agentes
 def agent_names(cfg: Dict[str, Any]) -> Dict[int, str]:
-    names = {0: "manual"}
+    names: Dict[int, str] = {}
     names[int(cfg["account"]["magic"])] = "engine"
     for section, value in cfg.items():
         if isinstance(value, dict) and "magic" in value and section != "account":
@@ -207,8 +211,10 @@ def summarize(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def agents_table(window: List[Dict[str, Any]], history: List[Dict[str, Any]], positions: List[Dict[str, Any]],
                  roster: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Uma linha por agente configurado (mesmo sem trades) + qualquer outro que apareça nos dados (manual etc.)."""
-    seen = list(roster) + [x["agente"] for x in history + window + positions if x["agente"] not in roster]
+    """Uma linha por agente EM OPERAÇÃO (ligado no config), mesmo sem trades. Desligados só aparecem se ainda
+    tiverem posição aberta; magics desconhecidos com posição também aparecem (segurança)."""
+    seen = [n for n, r in roster.items() if r.get("ligado")]
+    seen += [p["agente"] for p in positions if p["agente"] not in seen]
     out: Dict[str, Dict[str, Any]] = {}
     for name in dict.fromkeys(seen):
         r = roster.get(name, {})
@@ -388,21 +394,35 @@ def local_report(data: Dict[str, Any]) -> str:
 
 
 def split_message(text: str, limit: int = TG_LIMIT) -> List[str]:
-    """Partes de até `limit` caracteres sem cortar linhas (o Telegram aceita 4096 por mensagem)."""
+    """Partes de até `limit` caracteres (o Telegram aceita 4096). Corta preferindo as divisas de seção (linha em
+    branco), para não partir um bloco (ex.: a análise da IA) ao meio; seção maior que o limite é cortada por linha."""
+    def by_line(block: str) -> List[str]:
+        out, cur = [], ""
+        for line in block.split("\n"):
+            while len(line) > limit:                     # linha gigante (raro): corta no limite
+                if cur:
+                    out.append(cur)
+                    cur = ""
+                out.append(line[:limit])
+                line = line[limit:]
+            if cur and len(cur) + len(line) + 1 > limit:
+                out.append(cur)
+                cur = line
+            else:
+                cur = f"{cur}\n{line}" if cur else line
+        if cur:
+            out.append(cur)
+        return out
+
     parts: List[str] = []
     cur = ""
-    for line in text.split("\n"):
-        while len(line) > limit:                         # linha gigante (raro): corta no limite
-            if cur:
+    for sec in text.split("\n\n"):
+        for piece in (by_line(sec) if len(sec) > limit else [sec]):
+            if cur and len(cur) + len(piece) + 2 > limit:
                 parts.append(cur)
-                cur = ""
-            parts.append(line[:limit])
-            line = line[limit:]
-        if cur and len(cur) + len(line) + 1 > limit:
-            parts.append(cur)
-            cur = line
-        else:
-            cur = f"{cur}\n{line}" if cur else line
+                cur = piece
+            else:
+                cur = f"{cur}\n\n{piece}" if cur else piece
     if cur:
         parts.append(cur)
     return parts

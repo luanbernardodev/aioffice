@@ -8,7 +8,7 @@ import time
 
 from dotenv import load_dotenv
 
-from agents.v3_agent import V3Agent, load_agents_config
+from agents.v3_agent import V3Agent, load_agents_config, load_group_caps
 from engine.config import ROOT, load_config
 from engine.live import _connect
 from engine.mt5_broker import AccountGuardError
@@ -44,6 +44,12 @@ def main() -> int:
             logging.critical("%s recusado: %s", sec, exc)
             return EXIT_NO_RESTART
         agents.append(a)
+    caps = load_group_caps()
+    for a in agents:                                    # limite de posições simultâneas por grupo (ex.: orderflow BTC)
+        grp = a.g.get("grupo")
+        if grp and grp in caps:
+            members = [x for x in agents if x.g.get("grupo") == grp]
+            a.group_full = (lambda ms=members, cap=caps[grp]: sum(len(x._positions()) for x in ms) >= cap)
     last_cfg, last_hb = time.time(), 0.0
     while True:
         for a in agents:
