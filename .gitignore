@@ -11,3 +11,4 @@ state/
 backtest/orderflow/*.pkl
 backtest/orderflow/grid_of.csv
 backtest/agentes_v3/grid4_*.csv
+backtest/agentes_v3/grid5_*.csv
