@@ -71,6 +71,7 @@ def main() -> int:
                     if a.section in fresh:
                         a.g["kill_switch"] = bool(fresh[a.section].get("kill_switch", False))
                         a.g["enabled"] = bool(fresh[a.section].get("enabled", True))
+                        a.g["fechar_posicoes"] = bool(fresh[a.section].get("fechar_posicoes", True))
             except Exception as exc:  # noqa: BLE001
                 logging.error("config v3 ilegível (%s): mantendo o anterior", exc)
         if time.time() - last_hb >= 300:

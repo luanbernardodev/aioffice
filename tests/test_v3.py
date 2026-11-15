@@ -175,8 +175,9 @@ def test_competition_config_is_consistent(cfg):
     on = {k: g for k, g in v3.items() if g["enabled"]}
     assert {k for k in on if k.startswith("v4_")} == {"v4_gold_rsipb_m5", "v4_gold_rsix_m5", "v4_us500_st_h1",
                                                       "v4_us500_bb_h1", "v4_btc_rsipb_h1"}
-    of = {k: g for k, g in on.items() if k.startswith("of_btc_")}
-    assert len(on) == 5 + len(of) and len(of) == 15                       # v3 (acerto < 60%) desligados
+    of = {k: g for k, g in v3.items() if k.startswith("of_btc_")}
+    assert len(on) == 5 and len(of) == 15                                 # v3 e os 15 of_btc desligados (15/11)
+    assert all(not g["enabled"] and g["fechar_posicoes"] is False for g in of.values())
     from agents.v3_agent import load_group_caps
     from orderflow.filters import FILTERS
     assert load_group_caps() == {"orderflow_btc": 1}
@@ -294,3 +295,34 @@ def test_feed_gap_fill_continues_from_last_id(tmp_path):
     f = Feed(session=sess, state_file=tmp_path / "of.json")
     f.on_trade(5, 999, 100.0, 1.0, False)
     assert f.gap_fill() == 2 and f.last_id == 7 and f.levels[10] == [2.0, 1.0]
+
+
+
+def test_disabled_without_closing_keeps_positions_and_opens_nothing(tmp_path, monkeypatch):
+    r = rates()
+    mt5 = FakeMT5(r)
+    a = agent(tmp_path, monkeypatch, mt5)
+    a.g.update(enabled=False, fechar_posicoes=False)
+    monkeypatch.setattr(V, "entry_signal_now", lambda df, spec, m: (1, 2.0))
+    entry_bar = int(r["time"][-1])
+    a.state["trades"]["77"] = {"side": -1, "entry": 100.0, "A": 1.0, "sl": 102.0, "entry_bar": entry_bar}
+    mt5.pos = [types.SimpleNamespace(ticket=77, type=1, volume=0.01, sl=102.0, tp=99.0, profit=-1.0, swap=0.0,
+                                     price_open=100.0, time=entry_bar, magic=20261199)]
+    a.step()
+    assert not a.killed() and not a.accepting() and not mt5.sent        # não zera e não abre
+    mt5.pos = []
+    a.state["last_bar"] = 0
+    mt5.head += 300
+    a.step()
+    assert not [q for q in mt5.sent if q["action"] == 1]                  # sem posição: continua sem abrir
+
+
+def test_disabled_default_still_flattens(tmp_path, monkeypatch):
+    mt5 = FakeMT5(rates())
+    a = agent(tmp_path, monkeypatch, mt5)
+    a.g["enabled"] = False
+    a.state["trades"]["77"] = {"side": 1, "entry": 100.0, "A": 1.0, "sl": 98.0, "entry_bar": 0}
+    mt5.pos = [types.SimpleNamespace(ticket=77, type=0, volume=0.01, sl=98.0, tp=0.0, profit=0.0, swap=0.0,
+                                     price_open=100.0, time=0, magic=20261199)]
+    a.step()
+    assert a.killed() and mt5.sent[-1]["position"] == 77                  # padrão: desligar zera

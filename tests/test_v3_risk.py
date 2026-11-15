@@ -71,5 +71,5 @@ def test_daily_loss_blocks_new_entries():
 def test_config_has_risk_block_and_single_orderflow_slot():
     from agents.v3_agent import load_group_caps, load_risk_config
     r = load_risk_config()
-    assert r["max_risco_trade_pct"] <= 5 and r["max_risco_aberto_pct"] <= 10 and r["um_por_direcao"] is True
+    assert r["max_risco_trade_pct"] <= 8 and r["max_risco_aberto_pct"] <= 10 and r["um_por_direcao"] is True
     assert load_group_caps() == {"orderflow_btc": 1}

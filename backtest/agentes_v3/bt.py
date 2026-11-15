@@ -19,7 +19,7 @@ from backtest import ticks as T
 from engine.config import ROOT
 
 CACHE = ROOT / "data" / "v3"
-TF_MIN = {"M5": 5, "M15": 15, "H1": 60}
+TF_MIN = {"M5": 5, "M15": 15, "M30": 30, "H1": 60}
 
 # USD por 1.0 de preço no lote mínimo, swap em USD por noite no lote mínimo (compra, venda)
 SPECS = {

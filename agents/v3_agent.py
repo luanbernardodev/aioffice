@@ -30,7 +30,7 @@ from engine.mt5_broker import AccountGuardError, verify_account
 log = logging.getLogger("agents.v3")
 
 CONFIG_PATH = ROOT / "config" / "agente_v3_competicao.yaml"
-TF_MIN = {"M5": 5, "M15": 15, "H1": 60}
+TF_MIN = {"M5": 5, "M15": 15, "M30": 30, "H1": 60}
 CSV_FIELDS = ["ts_utc", "agent", "event", "ticket", "side", "bar_utc", "A", "spread", "price", "sl", "tp",
               "profit", "reason", "detail"]
 
@@ -144,7 +144,13 @@ class V3Agent:
         return df
 
     def killed(self) -> bool:
-        return self.kill_file.exists() or bool(self.g.get("kill_switch", False)) or not bool(self.g.get("enabled", True))
+        """Zera e não abre: kill switch, arquivo KILL, ou desligado com fechar_posicoes (padrão true)."""
+        off = not bool(self.g.get("enabled", True)) and bool(self.g.get("fechar_posicoes", True))
+        return self.kill_file.exists() or bool(self.g.get("kill_switch", False)) or off
+
+    def accepting(self) -> bool:
+        """Pode abrir novas posições? (desligado com fechar_posicoes: false só administra as abertas)"""
+        return bool(self.g.get("enabled", True)) and not self.killed()
 
     # ------------------------------------------------------------ ordens
     def _filling(self) -> int:
@@ -297,7 +303,7 @@ class V3Agent:
         positions = self._positions()
         for p in positions:
             self._manage_bar(p, df)
-        if positions or self.state["halted"] or self.killed():
+        if positions or self.state["halted"] or not self.accepting():
             return
         side, a0 = V.entry_signal_now(df[["time", "open", "high", "low", "close"]], self.spec, self.bar_min)
         if side == 0 or not a0 > 0:

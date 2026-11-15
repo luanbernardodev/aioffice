@@ -8,7 +8,7 @@
 # (zera e desliga, gravado em state/<nome>.json), kill_switch (relido a cada 60 s) e spread máximo de entrada.
 
 risco:                                     # 15/11: proteção de capital de TODOS os agentes deste arquivo (agents/v3_risk.py)
-  max_risco_trade_pct: 5.0                 # stop de uma entrada <= 5% da equity (senão a entrada é pulada)
+  max_risco_trade_pct: 8.0                 # stop de uma entrada <= 8% da equity (15/11: era 5%; senão a entrada é pulada)
   max_risco_aberto_pct: 10.0               # soma dos stops de TODAS as posições da conta + esta <= 10% da equity
   um_por_direcao: true                     # no máximo 1 posição por ativo e direção entre estes agentes
   perda_diaria_pct: 6.0                    # perda do dia (realizado + flutuante da conta) >= 6% -> sem novas entradas
@@ -17,22 +17,7 @@ competicao:
   inicio_utc: "2026-11-16 00:00"          # segunda
   fim_utc: "2026-11-21 00:00"             # inclui a sexta inteira
   antigos: ["engine A2", "engine A3", "goldflip", "sweep48", "rsi20", "goldnight_v2"]
-  novos: ["v4_gold_rsipb_m5", "v4_gold_rsix_m5", "v4_us500_st_h1", "v4_us500_bb_h1", "v4_btc_rsipb_h1",
-          "of_btc_01_rsipb_conf_w1",
-          "of_btc_02_rsipb_conf_w1",
-          "of_btc_03_chan_dz_agree",
-          "of_btc_04_st_dz_agree",
-          "of_btc_05_chan_delta_agree",
-          "of_btc_06_chan_dz_agree",
-          "of_btc_07_st_dz_agree",
-          "of_btc_08_bb_dz_agree",
-          "of_btc_09_rsipb_exh_w1",
-          "of_btc_10_chan_veto_cvd",
-          "of_btc_11_chan_cvd_slope",
-          "of_btc_12_rsipb_delta_agree",
-          "of_btc_13_rsipb_conf_w3",
-          "of_btc_14_chan_stk_w1",
-          "of_btc_15_st_dz_agree"]
+  novos: ["v4_gold_rsipb_m5", "v4_gold_rsix_m5", "v4_us500_st_h1", "v4_us500_bb_h1", "v4_btc_rsipb_h1"]
 
 v3_gold_chan_m15:                          # família goldnight/goldflip: SAR chandelier por fechamento, madrugada
   name: v3_gold_chan_m15
@@ -196,7 +181,8 @@ grupos:
 
 of_btc_01_rsipb_conf_w1:
   name: of_btc_01_rsipb_conf_w1
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261127
@@ -212,7 +198,8 @@ of_btc_01_rsipb_conf_w1:
 
 of_btc_02_rsipb_conf_w1:
   name: of_btc_02_rsipb_conf_w1
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261128
@@ -228,7 +215,8 @@ of_btc_02_rsipb_conf_w1:
 
 of_btc_03_chan_dz_agree:
   name: of_btc_03_chan_dz_agree
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261129
@@ -244,7 +232,8 @@ of_btc_03_chan_dz_agree:
 
 of_btc_04_st_dz_agree:
   name: of_btc_04_st_dz_agree
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261130
@@ -260,7 +249,8 @@ of_btc_04_st_dz_agree:
 
 of_btc_05_chan_delta_agree:
   name: of_btc_05_chan_delta_agree
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261131
@@ -276,7 +266,8 @@ of_btc_05_chan_delta_agree:
 
 of_btc_06_chan_dz_agree:
   name: of_btc_06_chan_dz_agree
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261132
@@ -292,7 +283,8 @@ of_btc_06_chan_dz_agree:
 
 of_btc_07_st_dz_agree:
   name: of_btc_07_st_dz_agree
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261133
@@ -308,7 +300,8 @@ of_btc_07_st_dz_agree:
 
 of_btc_08_bb_dz_agree:
   name: of_btc_08_bb_dz_agree
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261134
@@ -324,7 +317,8 @@ of_btc_08_bb_dz_agree:
 
 of_btc_09_rsipb_exh_w1:
   name: of_btc_09_rsipb_exh_w1
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261135
@@ -340,7 +334,8 @@ of_btc_09_rsipb_exh_w1:
 
 of_btc_10_chan_veto_cvd:
   name: of_btc_10_chan_veto_cvd
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261136
@@ -356,7 +351,8 @@ of_btc_10_chan_veto_cvd:
 
 of_btc_11_chan_cvd_slope:
   name: of_btc_11_chan_cvd_slope
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261137
@@ -372,7 +368,8 @@ of_btc_11_chan_cvd_slope:
 
 of_btc_12_rsipb_delta_agree:
   name: of_btc_12_rsipb_delta_agree
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261138
@@ -388,7 +385,8 @@ of_btc_12_rsipb_delta_agree:
 
 of_btc_13_rsipb_conf_w3:
   name: of_btc_13_rsipb_conf_w3
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261139
@@ -404,7 +402,8 @@ of_btc_13_rsipb_conf_w3:
 
 of_btc_14_chan_stk_w1:
   name: of_btc_14_chan_stk_w1
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261140
@@ -420,7 +419,8 @@ of_btc_14_chan_stk_w1:
 
 of_btc_15_st_dz_agree:
   name: of_btc_15_st_dz_agree
-  enabled: true
+  enabled: false                 # 15/11: desligado (stop de US$12-24 não cabe na conta)
+  fechar_posicoes: false         # não zera as posições abertas: seguem com SL/TP/saída por tempo
   kill_switch: false
   symbol: BTCUSD
   magic: 20261141
