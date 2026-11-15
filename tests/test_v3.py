@@ -179,7 +179,7 @@ def test_competition_config_is_consistent(cfg):
     assert len(on) == 5 + len(of) and len(of) == 15                       # v3 (acerto < 60%) desligados
     from agents.v3_agent import load_group_caps
     from orderflow.filters import FILTERS
-    assert load_group_caps() == {"orderflow_btc": 4}
+    assert load_group_caps() == {"orderflow_btc": 1}
     assert all(g["grupo"] == "orderflow_btc" and g["symbol"] == "BTCUSD" and g["timeframe"] == "H1"
                and g["signal"]["of_filter"] in FILTERS and g["signal"]["of_filter"] != "none" for g in of.values())
     magics = [int(g["magic"]) for g in v3.values()]

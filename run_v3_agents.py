@@ -8,7 +8,7 @@ import time
 
 from dotenv import load_dotenv
 
-from agents.v3_agent import V3Agent, load_agents_config, load_group_caps
+from agents.v3_agent import V3Agent, load_agents_config, load_group_caps, load_risk_config
 from engine.config import ROOT, load_config
 from engine.live import _connect
 from engine.mt5_broker import AccountGuardError
@@ -44,6 +44,12 @@ def main() -> int:
             logging.critical("%s recusado: %s", sec, exc)
             return EXIT_NO_RESTART
         agents.append(a)
+    from agents.v3_risk import Portfolio
+    portfolio = Portfolio(mt5, load_risk_config(), cfg["account"].get("server_time", "ny_plus_7"),
+                          agents_positions=lambda: [p for x in agents for p in x._positions()])
+    logging.info("[V3] proteção de capital: %s", portfolio.cfg)
+    for a in agents:
+        a.portfolio = portfolio
     caps = load_group_caps()
     for a in agents:                                    # limite de posições simultâneas por grupo (ex.: orderflow BTC)
         grp = a.g.get("grupo")

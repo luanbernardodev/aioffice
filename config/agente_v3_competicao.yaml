@@ -7,6 +7,12 @@
 # Guardas FIXAS no código: só DEMO, 1 posição por agente, magic exclusivo. Aqui: limite de perda por agente
 # (zera e desliga, gravado em state/<nome>.json), kill_switch (relido a cada 60 s) e spread máximo de entrada.
 
+risco:                                     # 15/11: proteção de capital de TODOS os agentes deste arquivo (agents/v3_risk.py)
+  max_risco_trade_pct: 5.0                 # stop de uma entrada <= 5% da equity (senão a entrada é pulada)
+  max_risco_aberto_pct: 10.0               # soma dos stops de TODAS as posições da conta + esta <= 10% da equity
+  um_por_direcao: true                     # no máximo 1 posição por ativo e direção entre estes agentes
+  perda_diaria_pct: 6.0                    # perda do dia (realizado + flutuante da conta) >= 6% -> sem novas entradas
+
 competicao:
   inicio_utc: "2026-11-16 00:00"          # segunda
   fim_utc: "2026-11-21 00:00"             # inclui a sexta inteira
@@ -186,7 +192,7 @@ v4_btc_rsipb_h1:                           # RSI(3) volta acima de 10 a favor da
 # filtro aleatório supera em <= 10%): 30 aprovadas = 15 estratégias distintas -> 15 agentes abaixo.
 # Exigem o feed run_orderflow_feed.py (janela ORDERFLOW): sem a barra no feed, a entrada é bloqueada.
 grupos:
-  orderflow_btc: 4                         # no máximo 4 posições simultâneas somando os 15 agentes (todos BTC 0.01)
+  orderflow_btc: 1                         # 15/11: era 4; 3 abriram juntos o mesmo sinal. Agora 1 posição no grupo
 
 of_btc_01_rsipb_conf_w1:
   name: of_btc_01_rsipb_conf_w1

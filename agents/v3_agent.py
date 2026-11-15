@@ -41,6 +41,13 @@ def load_agents_config(path: Optional[Path] = None) -> Dict[str, Dict[str, Any]]
     return {k: v for k, v in data.items() if isinstance(v, dict) and "magic" in v}
 
 
+def load_risk_config(path: Optional[Path] = None) -> Dict[str, Any]:
+    """Bloco `risco` do YAML (proteção de capital, agents/v3_risk.py)."""
+    with open(path or CONFIG_PATH, "r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    return dict(data.get("risco") or {})
+
+
 def load_group_caps(path: Optional[Path] = None) -> Dict[str, int]:
     """grupos: {nome: máximo de posições simultâneas} (bloco `grupos` do YAML)."""
     with open(path or CONFIG_PATH, "r", encoding="utf-8") as fh:
@@ -69,6 +76,7 @@ class V3Agent:
         self.last_close_try: Dict[str, float] = {}
         self.realized, self.realized_at = 0.0, 0.0
         self.group_full = None                           # definido pelo runner: True se o grupo já está no limite
+        self.portfolio = None                            # agents.v3_risk.Portfolio (definido pelo runner)
         from orderflow.live import STATE_FILE as _OF_STATE
         self.of_path = _OF_STATE
 
@@ -159,6 +167,13 @@ class V3Agent:
     def _enter(self, side: int, a0: float, bar_server: int, tick: Any) -> None:
         price = float(tick.ask if side == 1 else tick.bid)
         sl, tp = V.initial_levels(side, price, a0, self.ex)
+        if self.portfolio is not None:                   # proteção de capital (agents/v3_risk.py)
+            why = self.portfolio.check(self.symbol, side, price, sl, self.lot)
+            if why:
+                self._csv("BLOCKED", side=side, bar_utc=bar_server, A=round(a0, 5), price=price, sl=self._round(sl),
+                          reason="risco", detail=why)
+                log.warning("%s entrada bloqueada pela proteção de capital: %s", self.tag, why)
+                return
         req = {"action": self.mt5.TRADE_ACTION_DEAL, "symbol": self.symbol, "volume": self.lot,
                "type": self.mt5.ORDER_TYPE_BUY if side == 1 else self.mt5.ORDER_TYPE_SELL, "price": price,
                "sl": self._round(sl), "tp": self._round(tp) if tp else 0.0,
