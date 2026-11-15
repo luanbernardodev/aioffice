@@ -184,7 +184,8 @@ class V3Agent:
                 log.info("%s entrada pulada: %s", self.tag, why)
                 return
         if self.portfolio is not None:                   # proteção de capital (agents/v3_risk.py)
-            why = self.portfolio.check(self.symbol, side, price, sl, self.lot)
+            why = self.portfolio.check(self.symbol, side, price, sl, self.lot, group=self.g.get("grupo"), a0=a0,
+                                       spread=float(tick.ask - tick.bid))
             if why:
                 self._csv("BLOCKED", side=side, bar_utc=bar_server, A=round(a0, 5), price=price, sl=self._round(sl),
                           reason="risco", detail=why)

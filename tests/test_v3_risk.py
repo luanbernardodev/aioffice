@@ -55,11 +55,12 @@ def test_account_open_risk_cap_counts_all_positions():
     assert "risco aberto da conta" in why
 
 
-def test_one_position_per_symbol_direction():
+def test_one_position_per_symbol_direction_when_enabled():
     m = FakeMT5(equity=1000.0, balance=1000.0)
     own = [pos(side=-1, sl=64100.0)]
-    assert "já há posição vendedora" in pf(m, own=own).check("BTCUSD", -1, 64000.0, 64200.0, 0.01)
-    assert pf(m, own=own).check("BTCUSD", 1, 64000.0, 63800.0, 0.01) == ""
+    cfg = {"um_por_direcao": True, "sem_duplicata": False}
+    assert "já há posição vendedora" in pf(m, cfg, own=own).check("BTCUSD", -1, 64000.0, 64200.0, 0.01)
+    assert pf(m, cfg, own=own).check("BTCUSD", 1, 64000.0, 63800.0, 0.01) == ""
 
 
 def test_daily_loss_blocks_new_entries():
@@ -71,5 +72,32 @@ def test_daily_loss_blocks_new_entries():
 def test_config_has_risk_block_and_single_orderflow_slot():
     from agents.v3_agent import load_group_caps, load_risk_config
     r = load_risk_config()
-    assert r["max_risco_trade_pct"] <= 8 and r["max_risco_aberto_pct"] <= 10 and r["um_por_direcao"] is True
-    assert load_group_caps() == {"orderflow_btc": 1}
+    assert r["max_risco_trade_pct"] <= 8 and r["max_risco_aberto_pct"] <= 10 and r["sem_duplicata"] is True
+    assert r["isentos_grupos"] == ["orderflow_btc"]
+    assert load_group_caps() == {"orderflow_btc": 3}
+
+
+
+def mpos(side, entry, sl, magic, ticket, symbol="BTCUSD"):
+    p = pos(symbol=symbol, side=side, entry=entry, sl=sl, ticket=ticket)
+    p.magic = magic
+    return p
+
+
+def test_duplicate_same_side_and_price_is_blocked_first_one_stays():
+    m = FakeMT5(positions=[mpos(-1, 64004.85, 66000.0, 20261136, 11)], equity=1000.0, balance=1000.0)
+    why = pf(m).check("BTCUSD", -1, 64010.0, 66000.0, 0.01, a0=900.0, spread=40.0)     # tolerância 90
+    assert why.startswith("duplicata") and "#11" in why
+    assert pf(m).check("BTCUSD", -1, 64300.0, 66000.0, 0.01, a0=900.0, spread=40.0) == ""   # outro preço: abre
+    assert pf(m).check("BTCUSD", 1, 64004.85, 63000.0, 0.01, a0=900.0, spread=40.0) == ""   # outra direção: abre
+    assert pf(m).check("BTCUSD", -1, 64050.0, 66000.0, 0.01, a0=0.0, spread=40.0).startswith("duplicata")  # mín. 2x spread
+
+
+def test_exempt_group_skips_risk_caps_and_is_out_of_others_open_risk():
+    m = FakeMT5(positions=[mpos(-1, 64004.85, 66000.0, 20261136, k) for k in (1, 2, 3)], equity=140.0, balance=140.0)
+    cfg = {"isentos_grupos": ["orderflow_btc"]}
+    p = Portfolio(m, cfg, agents_positions=lambda: [], clock=lambda: NOW, exempt_magics={20261136})
+    assert p.check("BTCUSD", 1, 65000.0, 62600.0, 0.01, group="orderflow_btc", a0=900.0) == ""   # US$24 > 8%: isento
+    assert "risco do trade" in p.check("BTCUSD", 1, 65000.0, 62600.0, 0.01, group=None, a0=900.0)
+    assert p.open_risk() == 0.0                                                                   # isentos fora da soma
+    assert p.check("GOLD", 1, 3880.0, 3877.0, 0.01) == ""                                          # v4 opera normal

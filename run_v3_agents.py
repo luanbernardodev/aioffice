@@ -45,8 +45,10 @@ def main() -> int:
             return EXIT_NO_RESTART
         agents.append(a)
     from agents.v3_risk import Portfolio
-    portfolio = Portfolio(mt5, load_risk_config(), cfg["account"].get("server_time", "ny_plus_7"),
-                          agents_positions=lambda: [p for x in agents for p in x._positions()])
+    risk_cfg = load_risk_config()
+    exempt = {x.magic for x in agents if x.g.get("grupo") in set(risk_cfg.get("isentos_grupos") or [])}
+    portfolio = Portfolio(mt5, risk_cfg, cfg["account"].get("server_time", "ny_plus_7"),
+                          agents_positions=lambda: [p for x in agents for p in x._positions()], exempt_magics=exempt)
     logging.info("[V3] proteção de capital: %s", portfolio.cfg)
     for a in agents:
         a.portfolio = portfolio
