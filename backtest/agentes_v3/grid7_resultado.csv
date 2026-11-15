@@ -1,0 +1,10 @@
+agente,testadas,elegiveis_IS,escolha_IS,IS_US$,IS_acerto,OOS_n,OOS_US$,OOS_PF,OOS_acerto,OOS_DD,OOS_quebra,risco_med,retrospecto_capital_final,retrospecto_DD
+v4_gold_rsipb_m5,311040,216,"M15 night {""family"": ""RSIPB"", ""n"": 7, ""lvl"": 30, ""filter"": ""ma200""} SL1.0 TR0.75/0.25 TP3.0 T96",79.56,0.5,49,36.15,1.33,0.51,33.05,False,6.65,412.54,153.05
+v4_btc_rsipb_h1,552960,4026,"H1 us {""family"": ""RSIPB"", ""n"": 7, ""lvl"": 30, ""filter"": ""ma200""} SL0.75 TR2.0/0.0 TP0.0 T48",159.78,0.375,20,7.27,1.18,0.3,12.84,False,3.78,267.06,22.3
+v4_us500_bb_h1,414720,6820,"H1 all {""family"": ""BB"", ""k"": 2.0, ""filter"": ""ma200""} SL3.0 TR3.0/1.0 TP0.0 T48",55.64,0.367,58,-16.09,0.85,0.379,45.97,False,4.41,267.98,65.14
+v4_gold_rsix_m5,414720,245,"M5 night {""family"": ""RSIX"", ""x"": 30, ""side"": ""both"", ""filter"": ""ma200""} SL0.75 TR1.5/0.25 TP0.0 T24",101.34,0.359,26,-21.08,0.55,0.308,23.88,False,3.72,386.08,121.36
+v4_us500_st_h1,414720,64001,"M30 all {""family"": ""ST"", ""p"": 14, ""m"": 2.5, ""filter"": ""none""} SL2.5 TR1.0/1.0 TP3.0 T48",92.32,0.672,217,-40.58,0.81,0.622,75.14,False,2.56,212.54,28.77
+sweep48,345600,2249,"H1 us {""family"": ""SWEEP"", ""n"": 36, ""filter"": ""none""} SL1.0 TR1.25/0.5 TP1.5 T48",105.4,0.438,87,-50.21,0.74,0.299,83.93,False,4.8,426.02,72.78
+rsi20,368640,1236,"M5 us {""family"": ""RSIX"", ""x"": 30, ""side"": ""both"", ""filter"": ""none""} SL3.0 TR0.75/1.0 TP0.0 T24",101.06,0.687,213,-64.34,0.77,0.606,116.09,True,4.86,230.78,98.85
+goldflip,345600,1015,"M5 day {""family"": ""CHAN"", ""k"": 1.5, ""filter"": ""none""} SL2.5 TR2.0/1.0 TP3.0 T96",90.83,0.482,107,-126.25,0.67,0.318,173.31,True,7.41,584.55,149.78
+goldnight_v2,345600,2377,"M15 day {""family"": ""CHAN"", ""k"": 4.0, ""filter"": ""none""} SL0.75 TR0.25/0.0 TP0.0 T24",159.99,0.477,94,-145.14,0.48,0.298,169.64,True,6.2,584.55,149.78
