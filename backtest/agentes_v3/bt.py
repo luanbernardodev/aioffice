@@ -193,6 +193,84 @@ def run_bt_cap(o, h, l, c, sp, a, sig, sday, sl_k, tr_k, act_k, tp_k, max_bars, 
     return E[:k], X[:k], S[:k], P[:k], R[:k], N[:k], W[:k]
 
 
+@njit(cache=True)
+def run_bt_stop(o, h, l, c, sp, a, sig, sday, mode, sl_k, LL, HH, tr_k, act_k, tp_k, max_bars, sp_mult, max_risk_px):
+    """Como run_bt_cap, com 3 formas de stop: mode 0 = sl_k x ATR do sinal; mode 1 = estrutura: além da mínima (LL[i])
+    / máxima (HH[i] + spread) das últimas N barras com folga de sl_k x ATR; mode 2 = distância fixa sl_k em preço.
+    Stop do lado errado da entrada -> pula; distância > max_risk_px -> pula (limite de risco por trade)."""
+    n = len(c)
+    E = np.empty(n, np.int64); X = np.empty(n, np.int64); S = np.empty(n, np.int64)
+    P = np.empty(n); R = np.empty(n); N = np.empty(n, np.int64); W = np.empty(n, np.int64)
+    k = 0
+    i = 0
+    while i < n - 2:
+        s = sig[i]
+        if s == 0 or not (a[i] > 0):
+            i += 1
+            continue
+        j = i + 1
+        a0 = a[i]
+        spj = sp[j] * sp_mult
+        entry = o[j] + spj if s == 1 else o[j]
+        if mode == 0:
+            sl = entry - s * sl_k * a0
+        elif mode == 1:
+            sl = (LL[i] - sl_k * a0) if s == 1 else (HH[i] + sp[i] * sp_mult + sl_k * a0)
+        else:
+            sl = entry - s * sl_k
+        if (entry - sl) * s <= 0 or (entry - sl) * s > max_risk_px or not (sl == sl):
+            i += 1
+            continue
+        tp = entry + s * tp_k * a0 if tp_k > 0 else 0.0
+        sl0 = sl
+        best = entry
+        px = 0.0
+        why = -1
+        t = j
+        while t < n:
+            spt = sp[t] * sp_mult
+            if s == 1:
+                if l[t] <= sl:
+                    px = min(sl, o[t]) if t > j else sl
+                    why = 0
+                elif tp > 0 and h[t] >= tp:
+                    px = max(tp, o[t]) if t > j else tp
+                    why = 1
+            else:
+                if h[t] + spt >= sl:
+                    px = max(sl, o[t] + spt) if t > j else sl
+                    why = 0
+                elif tp > 0 and l[t] + spt <= tp:
+                    px = min(tp, o[t] + spt) if t > j else tp
+                    why = 1
+            if why >= 0:
+                break
+            # fechamento da barra t: melhor preço, trailing e tempo
+            if s == 1:
+                best = max(best, h[t])
+            else:
+                best = min(best, l[t] + spt)
+            if tr_k > 0 and (best - entry) * s >= act_k * a0:
+                new = best - s * tr_k * a0
+                sl = max(sl, new) if s == 1 else min(sl, new)
+            if t - j + 1 >= max_bars and t + 1 < n:
+                t += 1
+                px = o[t] if s == 1 else o[t] + sp[t] * sp_mult
+                why = 2
+                break
+            t += 1
+        if why < 0:
+            break
+        E[k] = j; X[k] = t; S[k] = s
+        P[k] = (px - entry) * s
+        R[k] = (entry - sl0) * s
+        N[k] = sday[t] - sday[j]
+        W[k] = why
+        k += 1
+        i = t if why != 2 else t       # tempo: sai na abertura de t; próximo sinal a partir do fechamento de t
+    return E[:k], X[:k], S[:k], P[:k], R[:k], N[:k], W[:k]
+
+
 def trades_usd(sym: str, b: pd.DataFrame, res) -> pd.DataFrame:
     E, X, S, P, R, N, W = res
     sp = SPECS[sym]
