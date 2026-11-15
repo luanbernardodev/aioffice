@@ -157,7 +157,7 @@ def test_report_shows_agents_without_trades_and_cumulative(cfg):
     ag = data["agentes"]
     assert ag["engine A3"]["janela"]["trades"] == 0                  # sem trade na janela, mas listado
     assert "goldnight" not in ag                                     # desligado e sem posição: fora da lista
-    assert ag["goldflip"]["janela"]["trades"] == 1 and ag["goldflip"]["acumulado"]["trades"] == 1
+    assert "goldflip" not in ag and "engine A2" not in ag                  # desligados em 15/11
     text = aud.local_report(data)
     assert "• engine A3 [US500Cash]\n   Janela: sem trades fechados" in text
     assert "\n\n🤖 AGENTES\n" in text and "\n\n📌 POSIÇÕES ABERTAS (0)\nnenhuma" in text

@@ -50,7 +50,7 @@ symbols:
     max_spread_atr: 0.30
     sessions:
       - {tz: America/New_York, start: "09:30", end: "16:00"}
-    agents: [A2_PULLBACK, A3_BOS_RETEST]
+    agents: [A3_BOS_RETEST]       # 15/11: A2 desligado (grade v7: -96 a -146 em US$100 em todas as variações)
   BTCUSD:
     enabled: false               # 12/11: A4 desligado (sem trades; backtest negativo). Fica só A2/A3 no US500Cash
     lot: 0.01
@@ -90,7 +90,7 @@ agents:
     tp_r: 2.0
 
 goldflip:                        # 6º agente: EA GoldFlipTrail (MQL5) supervisionado pelo Python
-  enabled: true                  # supervisor ligado (escreve goldflip_control.json)
+  enabled: false                 # 15/11: desligado (grade v7: -175 em US$100); sem supervisor o controle vence e o EA não abre
   symbol: GOLD
   magic: 20261108                # magic do EA — nenhum outro agente toca nessas posições
   interval_seconds: 300          # reclassifica o regime a cada 5 min

@@ -51,10 +51,10 @@ def test_ea_matches_section_and_has_risk_cap(cfg):
 
 def test_week_selection_enabled_and_disabled(cfg):
     on = {k for k in ("goldflip", "sweep48", "rsi20", "goldnight_v2") if cfg[k]["enabled"]}
-    assert on == {"goldflip", "sweep48", "rsi20", "goldnight_v2"}
-    assert not any(cfg[k]["enabled"] for k in ("goldnight", "btcflip", "capitulation"))
+    assert on == {"sweep48", "rsi20", "goldnight_v2"}                      # 15/11: goldflip desligado
+    assert not any(cfg[k]["enabled"] for k in ("goldnight", "btcflip", "capitulation", "goldflip"))
     assert cfg["symbols"]["US500Cash"]["enabled"] and not cfg["symbols"]["BTCUSD"]["enabled"]
-    assert cfg["symbols"]["US500Cash"]["agents"] == ["A2_PULLBACK", "A3_BOS_RETEST"]
+    assert cfg["symbols"]["US500Cash"]["agents"] == ["A3_BOS_RETEST"]      # 15/11: A2 desligado
 
 
 def test_auditor_knows_new_agent(cfg):

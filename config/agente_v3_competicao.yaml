@@ -16,8 +16,8 @@ risco:                                     # 15/11: proteção de capital de TOD
 competicao:
   inicio_utc: "2026-11-16 00:00"          # segunda
   fim_utc: "2026-11-21 00:00"             # inclui a sexta inteira
-  antigos: ["engine A2", "engine A3", "goldflip", "sweep48", "rsi20", "goldnight_v2"]
-  novos: ["v4_gold_rsipb_m5", "v4_gold_rsix_m5", "v4_us500_st_h1", "v4_us500_bb_h1", "v4_btc_rsipb_h1"]
+  antigos: ["engine A3", "sweep48", "rsi20", "goldnight_v2"]   # 15/11: goldflip e engine A2 desligados (quebrariam US$100)
+  novos: ["v4_gold_rsipb_m15n", "v4_gold_rsix_m5", "v4_us500_st_h1", "v4_us500_bb_h1", "v4_btc_rsipb_h1"]
 
 v3_gold_chan_m15:                          # família goldnight/goldflip: SAR chandelier por fechamento, madrugada
   name: v3_gold_chan_m15
@@ -97,7 +97,8 @@ v3_btc_rsi_h1:                             # família rsi20: RSI(14) H1 entra na
 # ===================================================================== v4: acerto >= 60% (grade v4)
 v4_gold_rsipb_m5:                          # RSI(7) volta acima de 20 a favor da MA200, M5 Londres/NY
   name: v4_gold_rsipb_m5
-  enabled: true
+  enabled: false                 # 15/11: substituído por v4_gold_rsipb_m15n (perde com a proteção de 8%: -12.7 em US$100)
+  fechar_posicoes: false
   kill_switch: false
   symbol: GOLD
   magic: 20261122
@@ -109,6 +110,22 @@ v4_gold_rsipb_m5:                          # RSI(7) volta acima de 20 a favor da
   max_spread: 1.5
   loss_limit_usd: 40
   # backtest 01-11/2026: 175 trades, acerto 74.8% IS / 73.4% OOS, PF 1.53/1.56, spread x2: 71% PF 1.30, DD 77
+
+v4_gold_rsipb_m15n:                        # 15/11: grade v7 (US$100, trailing): RSI(7) volta acima de 30 a favor da MA200, M15 madrugada
+  name: v4_gold_rsipb_m15n
+  enabled: true
+  kill_switch: false
+  symbol: GOLD
+  magic: 20261142
+  lot: min
+  timeframe: M15
+  signal: {family: RSIPB, n: 7, lvl: 30, filter: ma200, session: night}
+  exit: {sl: 1.0, trail: 1.0, act: 0.5, tp: 3.0}
+  max_bars: 24
+  max_spread: 1.5
+  loss_limit_usd: 20
+  # backtest US$100 com proteção de 8%: IS +42.4 | OOS 48 trades +72.0, PF 1.62, acerto 48%, DD 37 (escolha só pelo IS)
+  # aviso: na v8 a escolha robusta do IS mudou de sinal e perdeu no OOS -> vantagem frágil; limite de perda reduzido
 
 v4_gold_rsix_m5:                           # RSI(14) entra abaixo de 30, só compra, acima da MA200, M5 24h
   name: v4_gold_rsix_m5

@@ -1,0 +1,27 @@
+{
+  "aplicar": {
+    "v4_gold_rsipb_m5": {
+      "tf": "M15",
+      "sess": "night",
+      "spec": {
+        "family": "RSIPB",
+        "n": 7,
+        "lvl": 30,
+        "filter": "ma200"
+      },
+      "exit": {
+        "sl": 1.0,
+        "trail": 1.0,
+        "act": 0.5,
+        "tp": 3.0,
+        "max_bars": 24
+      },
+      "oos": 72.03,
+      "origem": "v7 trailing"
+    }
+  },
+  "desligar": [
+    "goldflip",
+    "engine A2"
+  ]
+}

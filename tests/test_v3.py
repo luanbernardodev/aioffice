@@ -173,8 +173,9 @@ def test_competition_config_is_consistent(cfg):
     from agents.v3_agent import load_agents_config
     v3 = load_agents_config()
     on = {k: g for k, g in v3.items() if g["enabled"]}
-    assert {k for k in on if k.startswith("v4_")} == {"v4_gold_rsipb_m5", "v4_gold_rsix_m5", "v4_us500_st_h1",
+    assert {k for k in on if k.startswith("v4_")} == {"v4_gold_rsipb_m15n", "v4_gold_rsix_m5", "v4_us500_st_h1",
                                                       "v4_us500_bb_h1", "v4_btc_rsipb_h1"}
+    assert on["v4_gold_rsipb_m15n"]["timeframe"] == "M15" and on["v4_gold_rsipb_m15n"]["exit"]["trail"] == 1.0
     of = {k: g for k, g in v3.items() if k.startswith("of_btc_")}
     assert len(on) == 5 and len(of) == 15                                 # v3 e os 15 of_btc desligados (15/11)
     assert all(not g["enabled"] and g["fechar_posicoes"] is False for g in of.values())
