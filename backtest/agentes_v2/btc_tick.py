@@ -96,7 +96,7 @@ def sweep48(tk, b5, sl_atr=3.0, tp_atr=5.0, trigger=0.75, dist=0.15, max_min=240
         k, px, why = exit_scan(tk, i_in, side, entry, sl, tp, a, trigger, dist, max_min * 60_000)
         busy_until = k
         out.append({"t_in": b5.time.iat[j + 1], "t_out": pd.Timestamp(tk["t"][k], unit="ms", tz="UTC"), "side": side,
-                    "usd": (px - entry) * side * VPU, "why": why, "sp_atr": sp / a})
+                    "usd": (px - entry) * side * VPU, "why": why, "sp_atr": sp / a, "risk_usd": sl_atr * a * VPU})
     return pd.DataFrame(out)
 
 
@@ -134,7 +134,7 @@ def rsi_buy(tk, b5, trigger_rsi=20.0, add_rsi=30.0, sl_atr=2.0, trigger=0.5, dis
         kx, px, why = exit_scan(tk, i_in, 1, entry, entry - sl_atr * a, 0.0, a, trigger, dist, max_min * 60_000)
         busy_until, armed_lock = kx, True
         out.append({"t_in": b5.time.iat[j + 1], "t_out": pd.Timestamp(tk["t"][kx], unit="ms", tz="UTC"), "side": 1,
-                    "usd": (px - entry) * VPU, "why": why, "sp_atr": sp / a})
+                    "usd": (px - entry) * VPU, "why": why, "sp_atr": sp / a, "risk_usd": sl_atr * a * VPU})
     return pd.DataFrame(out)
 
 

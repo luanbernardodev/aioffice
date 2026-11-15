@@ -173,6 +173,16 @@ class V3Agent:
     def _enter(self, side: int, a0: float, bar_server: int, tick: Any) -> None:
         price = float(tick.ask if side == 1 else tick.bid)
         sl, tp = V.initial_levels(side, price, a0, self.ex)
+        cap_usd = float(self.g.get("max_risk_usd", 0) or 0)
+        if cap_usd > 0:                                  # teto FIXO do agente (independe do capital da conta)
+            from agents.v3_risk import usd_per_price
+            risk = abs(price - sl) * usd_per_price(self.mt5, self.symbol, self.lot)
+            if risk > cap_usd:
+                why = f"risco do trade US${risk:.2f} > teto do agente US${cap_usd:.2f}"
+                self._csv("BLOCKED", side=side, bar_utc=bar_server, A=round(a0, 5), price=price, sl=self._round(sl),
+                          reason="teto_agente", detail=why)
+                log.info("%s entrada pulada: %s", self.tag, why)
+                return
         if self.portfolio is not None:                   # proteção de capital (agents/v3_risk.py)
             why = self.portfolio.check(self.symbol, side, price, sl, self.lot)
             if why:

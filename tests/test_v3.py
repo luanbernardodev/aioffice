@@ -327,3 +327,25 @@ def test_disabled_default_still_flattens(tmp_path, monkeypatch):
                                      price_open=100.0, time=0, magic=20261199)]
     a.step()
     assert a.killed() and mt5.sent[-1]["position"] == 77                  # padrão: desligar zera
+
+
+
+def test_agent_fixed_risk_cap_skips_wide_stop(tmp_path, monkeypatch):
+    mt5 = FakeMT5(rates())
+    mt5.symbol_info = lambda s: types.SimpleNamespace(point=0.01, digits=2, trade_tick_size=0.01, filling_mode=1,
+                                                       volume_min=0.01, trade_tick_value=0.01, trade_tick_value_loss=0.01)
+    a = agent(tmp_path, monkeypatch, mt5)
+    a.g["max_risk_usd"] = 0.03                       # SL 2 x ATR 2.0 = 4.0 de preço x 0.01 = US$0.04 > 0.03
+    monkeypatch.setattr(V, "entry_signal_now", lambda df, spec, m: (1, 2.0))
+    a.step()
+    assert not mt5.sent
+    a.g["max_risk_usd"] = 0.05
+    a.state["last_bar"] = 0
+    mt5.head += 300
+    a.step()
+    assert mt5.sent and mt5.sent[-1]["type"] == 0
+
+
+def test_gold_m15n_has_fixed_cap():
+    from agents.v3_agent import load_agents_config
+    assert load_agents_config()["v4_gold_rsipb_m15n"]["max_risk_usd"] == 8

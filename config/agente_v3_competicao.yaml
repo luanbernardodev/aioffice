@@ -124,6 +124,8 @@ v4_gold_rsipb_m15n:                        # 15/11: grade v7 (US$100, trailing):
   max_bars: 24
   max_spread: 1.5
   loss_limit_usd: 20
+  max_risk_usd: 8                # teto FIXO por trade: a vantagem só existe pulando os trades de stop > US$8
+                                 # (capital_reverso.py: sem o teto, PF 0.80 / -206 por ano)
   # backtest US$100 com proteção de 8%: IS +42.4 | OOS 48 trades +72.0, PF 1.62, acerto 48%, DD 37 (escolha só pelo IS)
   # aviso: na v8 a escolha robusta do IS mudou de sinal e perdeu no OOS -> vantagem frágil; limite de perda reduzido
 
