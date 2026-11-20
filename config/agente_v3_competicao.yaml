@@ -1,4 +1,4 @@
-# Agentes v3/v4 — competição de 16 a 20/11/2026 contra os agentes antigos.
+# Agentes v3/v4 — competição de 16 a 30/11/2026 contra os agentes antigos (estendida em 20/11).
 # Origem: grade de 11.844 estratégias (backtest/agentes_v3/grid.py, custo real de ticks em GOLD/BTC),
 # 77 aprovadas nos 5 critérios; finalistas analisados em backtest/agentes_v3/finalistas.py.
 # 14/11: exigência de acerto >= 60% -> grade v4 (backtest/agentes_v3/grid4.py), +56.448 estratégias com saídas por
@@ -18,7 +18,7 @@ risco:                                     # 15/11: proteção de capital de TOD
 
 competicao:
   inicio_utc: "2026-11-16 00:00"          # segunda
-  fim_utc: "2026-11-21 00:00"             # inclui a sexta inteira
+  fim_utc: "2026-12-01 00:00"             # 20/11: estendida até 30/11 (inclui o dia 30 inteiro)
   antigos: ["engine A3", "sweep48", "rsi20", "goldnight_v2"]   # 15/11: goldflip e engine A2 desligados (quebrariam US$100)
   novos: ["v4_gold_rsipb_m15n", "v4_gold_rsix_m5", "v4_us500_st_h1", "v4_us500_bb_h1", "v4_btc_rsipb_h1",
           "of_btc_01_rsipb_conf_w1",
