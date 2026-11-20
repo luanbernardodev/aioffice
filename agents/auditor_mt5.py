@@ -479,7 +479,25 @@ def run(hours: float, mt5: Any, cfg: Dict[str, Any], claude_client: Any = None, 
     log.info("relatório:\n%s", report)
     if telegram:
         send_telegram(report, post)
+        push_to_panel(report)
     return report
+
+
+def push_to_panel(report: str) -> None:
+    """Análise do auditor no painel (Supabase market_context). Falha aqui nunca impede o relatório."""
+    if os.getenv("PYTEST_CURRENT_TEST"):                 # testes nunca escrevem no Supabase real
+        return
+    url, key = _secret("SUPABASE_URL"), _secret("SUPABASE_KEY")
+    if not url or not key:
+        return
+    try:
+        from agents.supabase_sync import push_auditor_analysis
+        marker = "🧠 ANÁLISE DA IA"
+        part = report.split(marker, 1)[1] if marker in report else report.split("\n\n")[-1]
+        status = next((ln for ln in part.splitlines() if "STATUS" in ln.upper()), "")
+        push_auditor_analysis(url, key, part.strip(), status)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("análise não enviada ao painel: %s", exc)
 
 
 def main() -> int:

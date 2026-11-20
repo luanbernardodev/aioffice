@@ -187,3 +187,18 @@
   backdrop-filter: blur(14px);
   border: 1px solid rgba(56, 189, 248, 0.2);
 }
+
+/* evento de posição fechada: plaquinha sobe e some; aviso do topo entra e sai */
+@keyframes popup {
+  0% { opacity: 0; transform: translateY(14px) scale(0.6); }
+  8% { opacity: 1; transform: translateY(0) scale(1.15); }
+  14% { transform: scale(1); }
+  80% { opacity: 1; transform: translateY(-10px); }
+  100% { opacity: 0; transform: translateY(-26px); }
+}
+@keyframes toast {
+  0% { opacity: 0; transform: translate(0, -12px); }
+  8% { opacity: 1; transform: translate(0, 0); }
+  85% { opacity: 1; }
+  100% { opacity: 0; transform: translate(0, -8px); }
+}
