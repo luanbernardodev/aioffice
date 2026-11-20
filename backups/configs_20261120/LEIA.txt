@@ -1,0 +1,3 @@
+Backup das configurações ativas em 20/11/2026 (competição 16-30/11).
+Commit de origem: 189f897
+Restaurar: copiar os .yaml de volta para config/ (e os EAs para mql5/), ou: git checkout backup-configs-20261120 -- config/

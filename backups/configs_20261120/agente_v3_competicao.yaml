@@ -1,0 +1,457 @@
+# Agentes v3/v4 — competição de 16 a 30/11/2026 contra os agentes antigos (estendida em 20/11).
+# Origem: grade de 11.844 estratégias (backtest/agentes_v3/grid.py, custo real de ticks em GOLD/BTC),
+# 77 aprovadas nos 5 critérios; finalistas analisados em backtest/agentes_v3/finalistas.py.
+# 14/11: exigência de acerto >= 60% -> grade v4 (backtest/agentes_v3/grid4.py), +56.448 estratégias com saídas por
+# alvo; 45 aprovadas (GOLD 18, US500 27, BTC 0 nos 6 critérios). Os 5 agentes v4 abaixo substituem os v3 na competição.
+# Código: agents/v3_agent.py (mesmas regras do backtest) + agents/v3_signals.py. Processo: start_v3.bat.
+# Guardas FIXAS no código: só DEMO, 1 posição por agente, magic exclusivo. Aqui: limite de perda por agente
+# (zera e desliga, gravado em state/<nome>.json), kill_switch (relido a cada 60 s) e spread máximo de entrada.
+
+risco:                                     # 15/11: proteção de capital de TODOS os agentes deste arquivo (agents/v3_risk.py)
+  max_risco_trade_pct: 8.0                 # stop de uma entrada <= 8% da equity (15/11: era 5%; senão a entrada é pulada)
+  max_risco_aberto_pct: 10.0               # soma dos stops de TODAS as posições da conta + esta <= 10% da equity
+  um_por_direcao: false                    # 15/11: substituído pela regra de duplicata abaixo
+  sem_duplicata: true                      # mesma direção e entrada a < 0.1 ATR (mín. 2x spread) de posição aberta -> não abre
+  tolerancia_atr: 0.1
+  isentos_grupos: [orderflow_btc]          # of_btc fora dos limites de 8%/10% (regras próprias: grupo de 3 + duplicata)
+  perda_diaria_pct: 6.0                    # perda do dia (realizado + flutuante da conta) >= 6% -> sem novas entradas
+
+competicao:
+  inicio_utc: "2026-11-16 00:00"          # segunda
+  fim_utc: "2026-12-01 00:00"             # 20/11: estendida até 30/11 (inclui o dia 30 inteiro)
+  antigos: ["engine A3", "sweep48", "rsi20", "goldnight_v2"]   # 15/11: goldflip e engine A2 desligados (quebrariam US$100)
+  novos: ["v4_gold_rsipb_m15n", "v4_gold_rsix_m5", "v4_us500_st_h1", "v4_us500_bb_h1", "v4_btc_rsipb_h1",
+          "of_btc_01_rsipb_conf_w1",
+          "of_btc_02_rsipb_conf_w1",
+          "of_btc_03_chan_dz_agree",
+          "of_btc_04_st_dz_agree",
+          "of_btc_05_chan_delta_agree",
+          "of_btc_06_chan_dz_agree",
+          "of_btc_07_st_dz_agree",
+          "of_btc_08_bb_dz_agree",
+          "of_btc_09_rsipb_exh_w1",
+          "of_btc_10_chan_veto_cvd",
+          "of_btc_11_chan_cvd_slope",
+          "of_btc_12_rsipb_delta_agree",
+          "of_btc_13_rsipb_conf_w3",
+          "of_btc_14_chan_stk_w1",
+          "of_btc_15_st_dz_agree"]
+
+v3_gold_chan_m15:                          # família goldnight/goldflip: SAR chandelier por fechamento, madrugada
+  name: v3_gold_chan_m15
+  enabled: false                 # 14/11: substituído (acerto < 60% no backtest)
+  kill_switch: false
+  symbol: GOLD
+  magic: 20261117
+  lot: min
+  timeframe: M15
+  signal: {family: CHAN, k: 2.0, filter: none, session: night}
+  exit: {sl: 1.5, trail: 0, act: 0, tp: 0}
+  max_bars: 96                             # 24 h
+  max_spread: 1.5                          # mediana real 0.55
+  loss_limit_usd: 40
+  # backtest 01-11/2026: 235 trades, PF 2.04 (IS 2.25 / OOS 1.68), +2545, DD 211 (> saldo!), acerto 22%, risco ~US$12
+
+v3_us500_sweep_h1:                         # família sweep48 no índice: varre a mínima/máxima de 48 H1 e fecha de volta
+  name: v3_us500_sweep_h1
+  enabled: false                 # 14/11: substituído (acerto < 60% no backtest)
+  kill_switch: false
+  symbol: US500Cash
+  magic: 20261118
+  lot: min
+  timeframe: H1
+  signal: {family: SWEEP, n: 48, filter: none, session: all}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 3.0}
+  max_bars: 96
+  max_spread: 2.4                          # spread ao vivo 0.8
+  loss_limit_usd: 30
+  # backtest 06/2025-11/2026: 227 trades, PF 1.40 (IS 1.28 / OOS 1.61), +186, DD 41, acerto 57%, risco ~US$4.6
+
+v3_us500_st_h1:                            # família btcflip no índice: SuperTrend(10,3) vira a favor da EMA200, sessão NY
+  name: v3_us500_st_h1
+  enabled: false                 # 14/11: substituído (acerto < 60% no backtest)
+  kill_switch: false
+  symbol: US500Cash
+  magic: 20261119
+  lot: min
+  timeframe: H1
+  signal: {family: ST, p: 10, m: 3.0, filter: ema200, session: ny}
+  exit: {sl: 1.5, trail: 1.5, act: 1.0, tp: 0}
+  max_bars: 96
+  max_spread: 2.4
+  loss_limit_usd: 20
+  # backtest: 55 trades (amostra pequena), PF 2.68 (IS 1.95 / OOS 4.69), +82, DD 16, 13/16 meses positivos, risco ~US$2.5
+
+v3_us500_ema_h1:                           # cruzamento EMA 20/50 na sessão NY com trailing
+  name: v3_us500_ema_h1
+  enabled: false                 # 14/11: substituído (acerto < 60% no backtest)
+  kill_switch: false
+  symbol: US500Cash
+  magic: 20261120
+  lot: min
+  timeframe: H1
+  signal: {family: EMAX, f: 20, s: 50, session: ny}
+  exit: {sl: 1.5, trail: 1.5, act: 0, tp: 0}
+  max_bars: 96
+  max_spread: 2.4
+  loss_limit_usd: 20
+  # backtest: 56 trades, PF 2.00 (IS 2.50 / OOS 1.53), +59, DD 13, risco ~US$2.5
+
+v3_btc_rsi_h1:                             # família rsi20: RSI(14) H1 entra na zona 25/75, compra e venda, trailing 3 ATR
+  name: v3_btc_rsi_h1
+  enabled: false                 # 14/11: substituído (acerto < 60% no backtest)
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261121
+  lot: min
+  timeframe: H1
+  signal: {family: RSIX, x: 25, side: both, filter: none, session: all}
+  exit: {sl: 1.5, trail: 3.0, act: 0, tp: 0}
+  max_bars: 96
+  max_spread: 150                          # mediana real 50
+  loss_limit_usd: 40
+  # backtest 11/2025-11/2026: 101 trades, PF 1.52 (IS 1.55 / OOS 1.45), +239, DD 96, sem os 3 maiores +57
+
+# ===================================================================== v4: acerto >= 60% (grade v4)
+v4_gold_rsipb_m5:                          # RSI(7) volta acima de 20 a favor da MA200, M5 Londres/NY
+  name: v4_gold_rsipb_m5
+  enabled: false                 # 15/11: substituído por v4_gold_rsipb_m15n (perde com a proteção de 8%: -12.7 em US$100)
+  fechar_posicoes: false
+  kill_switch: false
+  symbol: GOLD
+  magic: 20261122
+  lot: min
+  timeframe: M5
+  signal: {family: RSIPB, n: 7, lvl: 20, filter: ma200, session: day}
+  exit: {sl: 2.0, trail: 0, act: 0, tp: 0.75}
+  max_bars: 24
+  max_spread: 1.5
+  loss_limit_usd: 40
+  # backtest 01-11/2026: 175 trades, acerto 74.8% IS / 73.4% OOS, PF 1.53/1.56, spread x2: 71% PF 1.30, DD 77
+
+v4_gold_rsipb_m15n:                        # 15/11: grade v7 (US$100, trailing): RSI(7) volta acima de 30 a favor da MA200, M15 madrugada
+  name: v4_gold_rsipb_m15n
+  enabled: true
+  kill_switch: false
+  symbol: GOLD
+  magic: 20261142
+  lot: min
+  timeframe: M15
+  signal: {family: RSIPB, n: 7, lvl: 30, filter: ma200, session: night}
+  exit: {sl: 1.0, trail: 1.0, act: 0.5, tp: 3.0}
+  max_bars: 24
+  max_spread: 1.5
+  loss_limit_usd: 20
+  max_risk_usd: 8                # teto FIXO por trade: a vantagem só existe pulando os trades de stop > US$8
+                                 # (capital_reverso.py: sem o teto, PF 0.80 / -206 por ano)
+  # backtest US$100 com proteção de 8%: IS +42.4 | OOS 48 trades +72.0, PF 1.62, acerto 48%, DD 37 (escolha só pelo IS)
+  # aviso: na v8 a escolha robusta do IS mudou de sinal e perdeu no OOS -> vantagem frágil; limite de perda reduzido
+
+v4_gold_rsix_m5:                           # RSI(14) entra abaixo de 30, só compra, acima da MA200, M5 24h
+  name: v4_gold_rsix_m5
+  enabled: true
+  kill_switch: false
+  symbol: GOLD
+  magic: 20261123
+  lot: min
+  timeframe: M5
+  signal: {family: RSIX, x: 30, side: long, filter: ma200, session: all}
+  exit: {sl: 2.0, trail: 0, act: 0, tp: 1.5}
+  max_bars: 24
+  max_spread: 1.5
+  loss_limit_usd: 40
+  # backtest: 91 trades, acerto 71.9% IS / 64.7% OOS, PF 1.84/1.68, spread x2: 62% PF 1.61, DD 64, pior -46 (gap)
+
+v4_us500_st_h1:                            # SuperTrend(10,3) vira, sessão NY, alvo curto
+  name: v4_us500_st_h1
+  enabled: true
+  kill_switch: false
+  symbol: US500Cash
+  magic: 20261124
+  lot: min
+  timeframe: H1
+  signal: {family: ST, p: 10, m: 3.0, filter: none, session: ny}
+  exit: {sl: 2.0, trail: 0, act: 0, tp: 0.75}
+  max_bars: 96
+  max_spread: 2.4
+  loss_limit_usd: 20
+  # backtest 06/2025-11/2026: 124 trades, acerto 78.7% IS / 79.6% OOS, PF 1.58/1.45, spread x2: 78% PF 1.48, DD 17
+
+v4_us500_bb_h1:                            # fecha de volta para dentro da Bollinger(20, 2.5) a favor da MA200
+  name: v4_us500_bb_h1
+  enabled: true
+  kill_switch: false
+  symbol: US500Cash
+  magic: 20261125
+  lot: min
+  timeframe: H1
+  signal: {family: BB, k: 2.5, filter: ma200, session: all}
+  exit: {sl: 4.0, trail: 0, act: 0, tp: 0.5}
+  max_bars: 96
+  max_spread: 2.4
+  loss_limit_usd: 20
+  # backtest: 74 trades (amostra pequena), acerto 90.7% IS / 93.5% OOS, PF 1.81/2.27, spread x2: 92% PF 1.97, DD 10
+
+v4_btc_rsipb_h1:                           # RSI(3) volta acima de 10 a favor da MA200, H1
+  name: v4_btc_rsipb_h1
+  enabled: true
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261126
+  lot: min
+  timeframe: H1
+  signal: {family: RSIPB, n: 3, lvl: 10, filter: ma200, session: all}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 0.5}
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 40
+  # backtest 11/2025-11/2026: 100 trades, acerto 91.2% IS / 93.0% OOS, PF 1.68/2.55, DD 29
+  # FORA do critério 6: risco mediano US$13.5 (> US$12); spread x2 PF 1.09. Nenhuma estratégia de BTC passou nos 6.
+
+# ===================================================================== orderflow Binance (grade de 75.264, 16/11)
+# backtest/orderflow/grid_of.py: 84 sinais x 2 sessões x 14 filtros de orderflow x 32 saídas em BTCUSD H1.
+# 8 critérios fixos (acerto >= 70% IS e OOS, lucro, spread x2, platô, risco <= US$15, filtro melhor que sem filtro,
+# filtro aleatório supera em <= 10%): 30 aprovadas = 15 estratégias distintas -> 15 agentes abaixo.
+# Exigem o feed run_orderflow_feed.py (janela ORDERFLOW): sem a barra no feed, a entrada é bloqueada.
+grupos:
+  orderflow_btc: 3                         # 15/11: no máximo 3 posições abertas somando os 15 of_btc
+
+of_btc_01_rsipb_conf_w1:
+  name: of_btc_01_rsipb_conf_w1
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261127
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: RSIPB, n: 3, lvl: 10, filter: ma200, session: all, of_filter: conf_w1}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 0.75}
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 30 trades acerto 90.0% PF 2.17 | OOS 19 trades acerto 94.7% PF 10.87 (sem filtro 1.72) | spread x2 PF 2.03 | risco mediano US$13.4 | p aleatório 0.038
+
+of_btc_02_rsipb_conf_w1:
+  name: of_btc_02_rsipb_conf_w1
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261128
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: RSIPB, n: 2, lvl: 5, filter: ma200, session: all, of_filter: conf_w1}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 0.5}
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 54 trades acerto 92.6% PF 1.53 | OOS 36 trades acerto 91.7% PF 3.67 (sem filtro 1.67) | spread x2 PF 1.05 | risco mediano US$13.2 | p aleatório 0.078
+
+of_btc_03_chan_dz_agree:
+  name: of_btc_03_chan_dz_agree
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261129
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: CHAN, k: 1.5, filter: none, session: all, of_filter: dz_agree}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 1.0}
+  max_bars: 24
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 128 trades acerto 73.4% PF 1.26 | OOS 59 trades acerto 79.7% PF 1.77 (sem filtro 0.90) | spread x2 PF 1.20 | risco mediano US$14.6 | p aleatório 0.008
+
+of_btc_04_st_dz_agree:
+  name: of_btc_04_st_dz_agree
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261130
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: ST, p: 14, m: 1.5, filter: none, session: all, of_filter: dz_agree}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 1.0}
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 117 trades acerto 79.5% PF 1.27 | OOS 57 trades acerto 84.2% PF 1.83 (sem filtro 0.94) | spread x2 PF 1.21 | risco mediano US$14.7 | p aleatório 0.009
+
+of_btc_05_chan_delta_agree:
+  name: of_btc_05_chan_delta_agree
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261131
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: CHAN, k: 1.5, filter: none, session: us, of_filter: delta_agree}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 1.0}
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 96 trades acerto 83.3% PF 1.50 | OOS 60 trades acerto 78.3% PF 1.19 (sem filtro 0.97) | spread x2 PF 1.15 | risco mediano US$14.9 | p aleatório 0.056
+
+of_btc_06_chan_dz_agree:
+  name: of_btc_06_chan_dz_agree
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261132
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: CHAN, k: 1.5, filter: none, session: us, of_filter: dz_agree}
+  exit: {sl: 2.0, trail: 0, act: 0, tp: 1.0}
+  max_bars: 24
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 51 trades acerto 72.5% PF 1.44 | OOS 37 trades acerto 73.0% PF 1.46 (sem filtro 0.76) | spread x2 PF 1.24 | risco mediano US$10.6 | p aleatório 0.021
+
+of_btc_07_st_dz_agree:
+  name: of_btc_07_st_dz_agree
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261133
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: ST, p: 7, m: 2.0, filter: none, session: all, of_filter: dz_agree}
+  exit: {sl: 1.5, trail: 0, act: 0, tp: 0.75}
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 95 trades acerto 70.5% PF 1.20 | OOS 48 trades acerto 79.2% PF 1.82 (sem filtro 0.98) | spread x2 PF 1.07 | risco mediano US$7.3 | p aleatório 0.007
+
+of_btc_08_bb_dz_agree:
+  name: of_btc_08_bb_dz_agree
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261134
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: BB, k: 1.5, filter: none, session: all, of_filter: dz_agree}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 1.0}
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 72 trades acerto 84.7% PF 1.52 | OOS 47 trades acerto 78.7% PF 1.20 (sem filtro 0.72) | spread x2 PF 1.12 | risco mediano US$14.0 | p aleatório 0.085
+
+of_btc_09_rsipb_exh_w1:
+  name: of_btc_09_rsipb_exh_w1
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261135
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: RSIPB, n: 2, lvl: 5, filter: ma200, session: all, of_filter: exh_w1}
+  exit: {sl: 2.0, trail: 0, act: 0, tp: 0.5}
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 37 trades acerto 86.5% PF 1.33 | OOS 27 trades acerto 85.2% PF 2.74 (sem filtro 1.39) | spread x2 PF 1.09 | risco mediano US$8.5 | p aleatório 0.096
+
+of_btc_10_chan_veto_cvd:
+  name: of_btc_10_chan_veto_cvd
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261136
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: CHAN, k: 1.0, filter: slope, session: all, of_filter: veto_cvd}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 1.0}
+  max_bars: 24
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 103 trades acerto 75.7% PF 1.35 | OOS 56 trades acerto 73.2% PF 1.18 (sem filtro 0.96) | spread x2 PF 1.16 | risco mediano US$13.4 | p aleatório 0.089
+
+of_btc_11_chan_cvd_slope:
+  name: of_btc_11_chan_cvd_slope
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261137
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: CHAN, k: 1.0, filter: slope, session: all, of_filter: cvd_slope}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 1.0}
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 92 trades acerto 79.3% PF 1.36 | OOS 48 trades acerto 79.2% PF 1.30 (sem filtro 0.97) | spread x2 PF 1.23 | risco mediano US$13.4 | p aleatório 0.054
+
+of_btc_12_rsipb_delta_agree:
+  name: of_btc_12_rsipb_delta_agree
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261138
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: RSIPB, n: 3, lvl: 10, filter: ma200, session: all, of_filter: delta_agree}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 0.5}
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 46 trades acerto 89.1% PF 1.32 | OOS 21 trades acerto 95.2% PF 7.19 (sem filtro 2.11) | spread x2 PF 1.05 | risco mediano US$13.4 | p aleatório 0.081
+
+of_btc_13_rsipb_conf_w3:
+  name: of_btc_13_rsipb_conf_w3
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261139
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: RSIPB, n: 7, lvl: 30, filter: ma200, session: us, of_filter: conf_w3}
+  exit: {sl: 1.5, trail: 1.5, act: 0.5, tp: 0.75}   # 15/11: trailing adotado (trailing_test.py: PF IS 1.41->1.74, OOS 1.57 igual)
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 34 trades acerto 73.5% PF 1.41 | OOS 16 trades acerto 75.0% PF 1.57 (sem filtro 1.21) | spread x2 PF 1.28 | risco mediano US$8.2 | p aleatório 0.096
+
+of_btc_14_chan_stk_w1:
+  name: of_btc_14_chan_stk_w1
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261140
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: CHAN, k: 1.0, filter: slope, session: all, of_filter: stk_w1}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 1.5}
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 47 trades acerto 72.3% PF 1.31 | OOS 18 trades acerto 72.2% PF 1.41 (sem filtro 0.58) | spread x2 PF 1.22 | risco mediano US$12.9 | p aleatório 0.027
+
+of_btc_15_st_dz_agree:
+  name: of_btc_15_st_dz_agree
+  enabled: true                  # 15/11: religado (competição): grupo de no máximo 3 + regra de duplicata
+  kill_switch: false
+  symbol: BTCUSD
+  magic: 20261141
+  grupo: orderflow_btc
+  lot: min
+  timeframe: H1
+  signal: {family: ST, p: 7, m: 2.0, filter: ema200, session: all, of_filter: dz_agree}
+  exit: {sl: 3.0, trail: 0, act: 0, tp: 0.5}
+  max_bars: 96
+  max_spread: 150
+  loss_limit_usd: 20
+  # backtest: IS 49 trades acerto 89.8% PF 1.16 | OOS 19 trades acerto 94.7% PF 2.68 (sem filtro 1.01) | spread x2 PF 1.15 | risco mediano US$14.0 | p aleatório 0.069

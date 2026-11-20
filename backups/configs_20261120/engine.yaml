@@ -1,0 +1,258 @@
+# Motor determinístico (engine/) — todos os parâmetros de preço em múltiplos de ATR.
+# Nada aqui é segredo: credenciais ficam só no .env.
+
+account:
+  demo_login: 309673774          # única conta autorizada a receber ordens
+  allow_real: false              # trava: o código recusa conta REAL enquanto for false (e exige confirmação extra)
+  magic: 20261107
+  dry_run: true                  # true = dados reais do MT5, ordens simuladas (paper). false = ordens reais na DEMO
+  server_time: ny_plus_7         # XM: horário do servidor = New York + 7h (UTC+2 inverno / UTC+3 verão)
+
+risk:
+  max_positions_total: 6         # conta posições abertas + ordens pendentes
+  max_positions_per_symbol: 3
+  daily_stop_usd: 10.0           # perda realizada no dia (UTC) -> pausa até o dia seguinte (~16% de US$62)
+  max_consecutive_losses: 4
+  streak_pause_minutes: 120
+  min_sl_atr: 1.0                # SL mínimo = 1 x ATR(M5)
+  max_sl_atr: 6.0                # SL acima disso -> setup descartado (risco grande demais p/ scalp)
+  tp1_r: 1.5
+  trailing:
+    activate_r: 1.0              # ativa em +1R ...
+    activate_spread_mult: 3.0    # ... ou spread x 3, o que for maior
+    atr_mult: 1.0                # trailing de 1 x ATR(M5), só a favor
+  account_guard:                 # kill switch diário -> GoldFlip enabled=false + zera até 00:00 UTC
+    daily_dd_pct: 3.0            # perda do dia (realizado + flutuante) >= 3% do saldo de início do dia
+    scope: agents                # agents = só os magics abaixo (ignora operações manuais) | account = conta inteira
+    magics: [20261107, 20261108, 20261109] # engine/, GoldFlip e BTCTrendFlip
+    check_seconds: 30
+
+regime:
+  h1_ma: 100
+  h1_slope_bars: 5               # inclinação = SMA100[t] - SMA100[t-5] (em ATR H1)
+  h1_min_slope_atr: 0.0
+  m15_swing_k: 3                 # fractal: pivô confirmado k barras depois
+  news_window_minutes: 30
+  news_keywords: ["CPI", "FOMC", "Federal Funds Rate", "Non-Farm", "PCE"]
+
+symbols:
+  GOLD:
+    enabled: false               # US$62 de saldo: 0.01 lote arrisca ~US$7-12/trade (11-19%). Religar com conta >= ~US$1000
+    lot: 0.01
+    max_spread_atr: 0.15
+    sessions:                    # janelas locais; vale se estiver em QUALQUER uma
+      - {tz: Europe/London, start: "07:00", end: "16:30"}
+      - {tz: America/New_York, start: "08:00", end: "17:00"}
+    agents: [A2_PULLBACK, A3_BOS_RETEST]
+  US500Cash:
+    enabled: true
+    lot: 0.1                     # volume_min da XM = 0.1 (0.01 é rejeitado)
+    max_spread_atr: 0.30
+    sessions:
+      - {tz: America/New_York, start: "09:30", end: "16:00"}
+    agents: [A3_BOS_RETEST]       # 15/11: A2 desligado (grade v7: -96 a -146 em US$100 em todas as variações)
+  BTCUSD:
+    enabled: false               # 12/11: A4 desligado (sem trades; backtest negativo). Fica só A2/A3 no US500Cash
+    lot: 0.01
+    max_spread_atr: 0.50         # fallback (só se o ATR H1 faltar): spread mediano XM ~0.42 x ATR(M5)
+    max_spread_atr_h1: 0.25      # filtro do A1 contra ATR(14) do H1: spread ~40 USD vs ATR H1 mediano ~355 (~0.11)
+    # max_spread: 60             # alternativa: limite fixo em USD (tem prioridade sobre os dois acima)
+    sessions: []                 # 24/7
+    agents: [A4_RSI_REVERSAL]    # A2/A3 desligados no BTC por custo de spread (ver backtest)
+
+agents:
+  A2_PULLBACK:
+    swing_k: 3
+    impulse_min_atr: 2.0         # impulso mínimo (H-L) em ATR(M5)
+    fib_levels: [0.5, 0.559, 0.618]
+    max_entries_per_impulse: 3
+    ma_period: 100
+    ma_touch_atr: 0.15
+    sl_buffer_atr: 0.2           # SL além da origem do impulso
+    tp_extension: 1.272
+    limit_expiry_bars: 24
+  A3_BOS_RETEST:
+    swing_k: 3
+    max_bars_after_bos: 24       # setup expira
+    retest_offset_atr: 0.05      # LIMIT um pouco acima/abaixo do nível rompido
+    sl_beyond_level_atr: 1.0
+    tp_extension: 1.272
+    min_break_leg_atr: 1.5
+  A4_RSI_REVERSAL:
+    timeframe: M15
+    rsi_period: 14
+    oversold: 25
+    overbought: 75
+    zone_lookback_bars: 3        # gatilho de PA vale até 3 barras após o RSI tocar a zona
+    trend_filter: true           # true: compra só acima da MA100 H1 / venda só abaixo
+    sl_lookback_bars: 5
+    sl_buffer_atr: 0.2
+    tp_r: 2.0
+
+goldflip:                        # 6º agente: EA GoldFlipTrail (MQL5) supervisionado pelo Python
+  enabled: false                 # 15/11: desligado (grade v7: -175 em US$100); sem supervisor o controle vence e o EA não abre
+  symbol: GOLD
+  magic: 20261108                # magic do EA — nenhum outro agente toca nessas posições
+  interval_seconds: 300          # reclassifica o regime a cada 5 min
+  control_ttl_seconds: 900       # EA trata controle mais velho que isso como enabled=false (fail-safe)
+  files_dir: auto                # auto = <data_path do terminal>/MQL5/Files
+  news_window_minutes: 15
+  news_keywords: ["CPI", "FOMC", "Federal Funds Rate", "Non-Farm"]
+  sessions:
+    - {tz: Europe/London, start: "07:00", end: "16:30"}
+    - {tz: America/New_York, start: "08:00", end: "17:00"}
+  regime:
+    ma_period: 100
+    atr_period: 14
+    slope_bars: 10
+    trend_dist_atr: 1.0          # |close - MA100(M5)| >= 1 x ATR(M5) ...
+    trend_slope_atr: 0.3         # ... e MA100 inclinada >= 0.3 x ATR em 10 barras na mesma direção ...
+                                 # ... e M1 do mesmo lado da MA100(M1) -> TENDÊNCIA; senão LATERAL
+  params:                        # o que o supervisor escreve por regime (trail em múltiplos de ATR)
+    trend:   {enabled: true,  trail_atr: 1.5}
+    lateral: {enabled: false, trail_atr: 0.8}   # flip+trail em lateral = serrote; ajuste se o EA tiver lógica própria p/ range
+  min_atr: 1.5                   # ATR(M5) mínimo em USD para operar (mercado morto -> enabled=false)
+  max_spread_atr: 0.15           # max_spread (pontos) = 0.15 x ATR(M5) / point
+
+btcflip:                         # 7º agente: EA BTCTrendFlip (SuperTrend 10,3 H4 + EMA200 + trailing 3xATR)
+  enabled: false                 # 12/11: desligado (sem trades na semana). Sem supervisor o controle vence e o EA não abre
+  symbol: BTCUSD
+  magic: 20261109
+  control_file: btcflip_control.json
+  status_file: btcflip_status.json
+  interval_seconds: 300
+  control_ttl_seconds: 900
+  files_dir: auto
+  news_window_minutes: 30        # bloqueia NOVAS entradas ±30 min de CPI/FOMC/NFP
+  news_keywords: ["CPI", "FOMC", "Federal Funds Rate", "Non-Farm"]
+  sessions: []                   # 24/7
+  flatten_outside_session: false
+  flatten_on_news: false         # operação de vários dias: SL na corretora protege; não zera por notícia
+  flatten_on_kill: false         # kill switch só bloqueia novas entradas (zerar mataria a perna de tendência)
+  regime:
+    mode: h4_ema200
+    ema_period: 200
+    atr_period: 14
+  params:
+    trend:   {enabled: true, trail_atr: 3.0}
+    lateral: {enabled: false, trail_atr: 3.0}
+  min_atr: 0
+  max_spread_atr: 0.15           # spread máximo = 0.15 x ATR(H4)
+
+sweep48:                         # agente de scalp BTCUSD M5; ocupa a vaga ociosa do A3_BOS_RETEST no BTC
+  enabled: true
+  symbol: BTCUSD
+  magic: 20261110
+  lot: 0.01
+  start_hour: 15                 # hora de abertura da barra, relógio do servidor XM
+  end_hour: 20                   # inclusive (até 20:59)
+  sl_atr: 3.0
+  tp_atr: 5.0
+  trail_trigger_atr: 0.75
+  trail_dist_atr: 0.15
+  max_minutes: 240
+  loss_limit_usd_per_btc: 1500   # acumulado do magic <= -1500 USD por 1 BTC de exposição
+  deviation_points: 500
+  poll_ms: 50
+  signal_max_age_seconds: 60
+
+capitulation:                    # compra de exaustão em BTCUSD (processo próprio)
+  enabled: false                 # 12/11: desligado (sem trades na semana)
+  symbol: BTCUSD
+  magic: 20261111
+  lot: 0.01
+  trigger_rsi: 10                # RSI(14) M15, com a barra em formação, avaliado a cada M5 fechada
+  add_rsi: 20                    # enquanto abaixo disso, novas compras até algum stop ficar positivo
+  max_entries: 3
+  sl_atr: 2.0
+  trail_trigger_atr: 0.5
+  trail_dist_atr: 0.25
+  max_minutes: 240
+  loss_limit_usd_per_btc: 3000   # -30 USD com 0.01 lote
+  deviation_points: 500
+  poll_ms: 50
+  signal_max_age_seconds: 60
+
+rsi20:                           # compra em RSI <= 20 no BTCUSD (mesmo código do capitulation)
+  enabled: true
+  symbol: BTCUSD
+  magic: 20261112
+  lot: 0.01
+  trigger_rsi: 20
+  add_rsi: 30                    # só rearma depois que o RSI voltar a 30 ou mais
+  max_entries: 1
+  lock_after_entry: true         # uma compra por episódio
+  sl_atr: 2.0
+  trail_trigger_atr: 0.5
+  trail_dist_atr: 0.25
+  max_minutes: 240
+  loss_limit_usd_per_btc: 1500   # -15 USD com 0.01 lote
+  deviation_points: 500
+  poll_ms: 50
+  signal_max_age_seconds: 60
+
+goldnight:                       # EA GoldNightFlip: GOLD M5 fora de Londres/NY
+  enabled: false                 # 12/11: desligado (6 trades, -26.00, PF 0.11 ao vivo)
+  symbol: GOLD
+  magic: 20261113
+  control_file: goldnight_control.json
+  status_file: goldnight_status.json
+  interval_seconds: 300
+  control_ttl_seconds: 900
+  files_dir: auto
+  news_window_minutes: 15
+  news_keywords: ["CPI", "FOMC", "Federal Funds Rate", "Non-Farm"]
+  night_window: true             # opera FORA das sessões abaixo, seg-sex (NY); domingo à noite fica de fora
+  sessions:
+    - {tz: Europe/London, start: "07:00", end: "16:30"}
+    - {tz: America/New_York, start: "08:00", end: "17:00"}
+  use_kill_switch: false         # fora do kill switch diário de 3%
+  loss_limit_usd: 40.0           # perda acumulada do magic: zera e para este agente
+  regime:
+    ma_period: 100
+    atr_period: 14
+    slope_bars: 10
+    trend_dist_atr: 1.0
+    trend_slope_atr: 0.3
+  params:
+    trend:   {enabled: true,  trail_atr: 3.0}
+    lateral: {enabled: false, trail_atr: 3.0}
+  min_atr: 1.5
+  max_spread_atr: 0.15
+
+goldnight_v2:                    # AGENTE GOLD APRIMORADO: EA GoldNightV2 = GoldNightFlip + teto de risco US$10/trade
+  enabled: true                  # backtest tick a tick 01-11/2026: PF 1.61 IS / 1.49 OOS, maxDD ~US$117, risco mediano US$8.6
+  symbol: GOLD
+  magic: 20261116
+  control_file: goldnight_v2_control.json
+  status_file: goldnight_v2_status.json
+  interval_seconds: 300
+  control_ttl_seconds: 900
+  files_dir: auto
+  news_window_minutes: 15
+  news_keywords: ["CPI", "FOMC", "Federal Funds Rate", "Non-Farm"]
+  night_window: true             # opera FORA das sessões abaixo, seg-sex (NY)
+  sessions:
+    - {tz: Europe/London, start: "07:00", end: "16:30"}
+    - {tz: America/New_York, start: "08:00", end: "17:00"}
+  use_kill_switch: false
+  loss_limit_usd: 40.0           # perda acumulada do magic: zera e para este agente
+  regime:
+    ma_period: 100
+    atr_period: 14
+    slope_bars: 10
+    trend_dist_atr: 1.0
+    trend_slope_atr: 0.3
+  params:
+    trend:   {enabled: true,  trail_atr: 3.0}
+    lateral: {enabled: false, trail_atr: 3.0}
+  min_atr: 1.5
+  max_spread_atr: 0.15
+
+backtest:
+  spread_mult: 1.5               # spread das barras do MT5 é o MÍNIMO da barra -> inflaciona
+  bars: 99999                    # máximo do terminal (~17 meses M5 GOLD/US500, ~12 BTC)
+
+logging:
+  trades_csv: logs/trades.csv
+  supabase_sink: false           # true = espelha trades no Supabase em thread de fundo (fora do loop)
