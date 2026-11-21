@@ -15,11 +15,15 @@ if ($k -notmatch '^sb_secret_\S{10,}$') { Write-Host "Isso nao parece uma chave 
 $url = (Get-Content $envPath | Where-Object { $_ -like 'SUPABASE_URL=*' } | Select-Object -First 1) -replace '^SUPABASE_URL=', '' -replace '["'']', ''
 if ($url) {
     try {
-        Invoke-WebRequest -UseBasicParsing -Uri "$($url.Trim())/rest/v1/agents_status?select=agent_id&limit=1" `
+        # User-Agent neutro: o Supabase recusa chave secreta quando o pedido parece vir de navegador ("Mozilla/...").
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -UseBasicParsing -UserAgent 'quant-office-sync' -Uri "$($url.Trim())/rest/v1/agents_status?select=agent_id&limit=1" `
             -Headers @{ apikey = $k; Authorization = "Bearer $k" } | Out-Null
         Write-Host "Supabase aceitou a chave." -ForegroundColor Green
     } catch {
-        Write-Host "Supabase RECUSOU a chave ($($_.Exception.Message)). Nada foi alterado." -ForegroundColor Red; exit 1
+        $det = $_.ErrorDetails.Message
+        Write-Host "Supabase RECUSOU a chave ($($_.Exception.Message)) $det" -ForegroundColor Red
+        Write-Host "Nada foi alterado." -ForegroundColor Red; exit 1
     }
 }
 
