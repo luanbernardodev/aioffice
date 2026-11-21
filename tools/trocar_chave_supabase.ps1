@@ -12,7 +12,7 @@ finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 
 if ($k -notmatch '^sb_secret_\S{10,}$') { Write-Host "Isso nao parece uma chave sb_secret_. Nada foi alterado." -ForegroundColor Red; exit 1 }
 
-$url = (Get-Content $envPath | Where-Object { $_ -like 'SUPABASE_URL=*' } | Select-Object -First 1) -replace '^SUPABASE_URL=', ''
+$url = (Get-Content $envPath | Where-Object { $_ -like 'SUPABASE_URL=*' } | Select-Object -First 1) -replace '^SUPABASE_URL=', '' -replace '["'']', ''
 if ($url) {
     try {
         Invoke-WebRequest -UseBasicParsing -Uri "$($url.Trim())/rest/v1/agents_status?select=agent_id&limit=1" `
