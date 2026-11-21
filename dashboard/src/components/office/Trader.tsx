@@ -179,7 +179,7 @@ export function Trader({ agent, position, zoneColor, rank, compPnl, open, lastEv
       </group>
 
       {/* plaquinha acima da cabeça */}
-      <Html position={[0, 2.6, 0.5]} center distanceFactor={13} zIndexRange={[20, 0]} style={{ pointerEvents: 'none' }}>
+      <Html position={[0, 2.6, 0.5]} center distanceFactor={13} zIndexRange={[8, 0]} style={{ pointerEvents: 'none' }}>
         <div className="flex flex-col items-center select-none">
           {eventLive && lastEvent && (
             <div

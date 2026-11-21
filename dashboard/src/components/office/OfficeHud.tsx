@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useMemo } from 'react';
-import { Activity, Radio, ShieldAlert, Trophy, Wallet, X } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Activity, ChevronDown, Radio, ShieldAlert, Trophy, Wallet, X } from 'lucide-react';
 import { AgentStatus, MarketContext, MT5AccountStatus, Trade } from '@/types';
 import { CloseEvent, Competition } from '@/hooks/useOffice';
 import { GROUP_STYLE, ZONES, fmtUsd, groupOf, shortName } from './layout';
@@ -29,6 +29,39 @@ function daysLeft(fim?: string | null) {
   return ms > 0 ? Math.ceil(ms / 86400000) : 0;
 }
 
+
+type FoldKey = 'feed' | 'auditor' | 'placar';
+const FOLD_KEY = 'quant-office:paineis-recolhidos';
+
+/** Painéis recolhidos/expandidos, lembrados no navegador (falha silenciosa sem localStorage). */
+function useFold(): [Record<FoldKey, boolean>, (k: FoldKey) => void] {
+  const [fold, setFold] = useState<Record<FoldKey, boolean>>({ feed: false, auditor: false, placar: false });
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(FOLD_KEY);
+      if (raw) setFold((f) => ({ ...f, ...JSON.parse(raw) }));
+    } catch {
+      /* sem armazenamento: segue expandido */
+    }
+  }, []);
+  const toggle = useCallback((k: FoldKey) => {
+    setFold((f) => {
+      const next = { ...f, [k]: !f[k] };
+      try {
+        window.localStorage.setItem(FOLD_KEY, JSON.stringify(next));
+      } catch {
+        /* ignora */
+      }
+      return next;
+    });
+  }, []);
+  return [fold, toggle];
+}
+
+function Chevron({ open }: { open: boolean }) {
+  return <ChevronDown size={15} className={`shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />;
+}
+
 export function OfficeHud({ agents, trades, account, competition, auditor, events, recentCloses, connected, selected, onSelect }: HudProps) {
   const byId = useMemo(() => Object.fromEntries(agents.map((a) => [a.agent_id, a])), [agents]);
   const g = competition?.total_por_grupo;
@@ -39,9 +72,10 @@ export function OfficeHud({ agents, trades, account, competition, auditor, event
   const statusCls = status === 'CRÍTICO' ? 'bg-rose-500/20 text-rose-300 ring-rose-400/40' : status === 'ATENÇÃO'
     ? 'bg-amber-500/20 text-amber-200 ring-amber-400/40' : 'bg-emerald-500/20 text-emerald-200 ring-emerald-400/40';
   const liveIds = new Set(events.filter((e) => Date.now() - e.at < 60000).map((e) => e.id));
+  const [fold, toggle] = useFold();
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-10 font-sans text-slate-100">
+    <div className="pointer-events-none absolute inset-0 z-30 font-sans text-slate-100">
       {/* barra superior */}
       <header className={`pointer-events-auto absolute left-4 right-4 top-4 flex flex-wrap items-center gap-x-6 gap-y-2 px-5 py-3 ${card}`}>
         <div className="flex items-center gap-2.5">
@@ -83,12 +117,13 @@ export function OfficeHud({ agents, trades, account, competition, auditor, event
       )}
 
       {/* placar */}
-      <aside className={`pointer-events-auto absolute right-4 top-24 bottom-4 w-[330px] flex flex-col ${card}`}>
-        <div className="flex items-center justify-between px-4 pt-3 pb-2">
+      <aside className={`pointer-events-auto absolute right-4 top-24 w-[330px] flex flex-col ${card} ${fold.placar ? '' : 'bottom-4'}`}>
+        <button onClick={() => toggle('placar')} className="flex items-center justify-between gap-2 px-4 pt-3 pb-2 text-left" title={fold.placar ? 'Expandir' : 'Recolher'}>
           <span className="text-[12px] font-bold tracking-widest text-slate-300">PLACAR DA COMPETIÇÃO</span>
-          <span className="text-[10px] text-slate-500">{competition?.inicio_utc?.slice(5, 10).split('-').reverse().join('/')} → {competition?.fim_utc ? new Date(new Date(competition.fim_utc.replace(' ', 'T') + 'Z').getTime() - 1).toISOString().slice(5, 10).split('-').reverse().join('/') : '…'}</span>
-        </div>
-        <div className="flex-1 overflow-y-auto px-2 pb-2 [scrollbar-width:thin]">
+          <span className="ml-auto text-[10px] text-slate-500">{competition?.inicio_utc?.slice(5, 10).split('-').reverse().join('/')} → {competition?.fim_utc ? new Date(new Date(competition.fim_utc.replace(' ', 'T') + 'Z').getTime() - 1).toISOString().slice(5, 10).split('-').reverse().join('/') : '…'}</span>
+          <Chevron open={!fold.placar} />
+        </button>
+        <div className={`flex-1 overflow-y-auto px-2 pb-2 [scrollbar-width:thin] ${fold.placar ? 'hidden' : ''}`}>
           {(competition?.placar || []).map((r, i) => {
             const a = byId[r.agente];
             return (
@@ -110,8 +145,16 @@ export function OfficeHud({ agents, trades, account, competition, auditor, event
 
       {/* feed de fechamentos */}
       <section className={`pointer-events-auto absolute left-4 bottom-4 w-[360px] max-h-[34vh] flex flex-col ${card}`}>
-        <div className="px-4 pt-3 pb-2 text-[12px] font-bold tracking-widest text-slate-300">POSIÇÕES FECHADAS</div>
-        <div className="overflow-y-auto px-2 pb-2 [scrollbar-width:thin]">
+        <button onClick={() => toggle('feed')} className="flex items-center gap-2 px-4 pt-3 pb-2 text-left" title={fold.feed ? 'Expandir' : 'Recolher'}>
+          <span className="text-[12px] font-bold tracking-widest text-slate-300">POSIÇÕES FECHADAS</span>
+          {fold.feed && recentCloses[0] && (
+            <span className={`text-[11px] font-mono ${pnlClass(Number(recentCloses[0].profit_usd))}`}>
+              últ. {shortName(recentCloses[0].agent_id)} {fmtUsd(Number(recentCloses[0].profit_usd))}
+            </span>
+          )}
+          <Chevron open={!fold.feed} />
+        </button>
+        <div className={`overflow-y-auto px-2 pb-2 [scrollbar-width:thin] ${fold.feed ? 'hidden' : ''}`}>
           {recentCloses.length === 0 && <div className="px-2 py-3 text-[12px] text-slate-500">Nenhum fechamento ainda.</div>}
           {recentCloses.map((t) => (
             <div key={t.ticket_mt5} className={`flex items-center gap-2 rounded-xl px-2 py-1.5 ${liveIds.has(String(t.ticket_mt5)) ? 'bg-white/10 ring-1 ring-white/20' : ''}`}>
@@ -126,24 +169,25 @@ export function OfficeHud({ agents, trades, account, competition, auditor, event
 
       {/* auditor */}
       <section className={`pointer-events-auto absolute left-[390px] bottom-4 w-[min(520px,calc(100vw-760px))] max-h-[34vh] flex flex-col ${card}`}>
-        <div className="flex items-center gap-2 px-4 pt-3 pb-2">
+        <button onClick={() => toggle('auditor')} className="flex items-center gap-2 px-4 pt-3 pb-2 text-left" title={fold.auditor ? 'Expandir' : 'Recolher'}>
           <ShieldAlert size={14} className="text-slate-400" />
           <span className="text-[12px] font-bold tracking-widest text-slate-300">AUDITOR</span>
           <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${statusCls}`}>{status}</span>
           <span className="ml-auto text-[10px] text-slate-500">{auditor?.created_at ? new Date(auditor.created_at).toLocaleString('pt-BR') : ''}</span>
-        </div>
-        <div className="overflow-y-auto whitespace-pre-line px-4 pb-3 text-[12px] leading-relaxed text-slate-300 [scrollbar-width:thin]">
+          <Chevron open={!fold.auditor} />
+        </button>
+        <div className={`overflow-y-auto whitespace-pre-line px-4 pb-3 text-[12px] leading-relaxed text-slate-300 [scrollbar-width:thin] ${fold.auditor ? 'hidden' : ''}`}>
           {auditText || 'A próxima auditoria aparece aqui (a cada 4 horas).'}
         </div>
       </section>
 
       {/* ficha do agente */}
-      {selected && <AgentDrawer agent={selected} trades={trades} competition={competition} onClose={() => onSelect(null)} />}
+      {selected && <AgentDrawer agent={selected} trades={trades} competition={competition} placarFolded={fold.placar} onClose={() => onSelect(null)} />}
     </div>
   );
 }
 
-function AgentDrawer({ agent, trades, competition, onClose }: { agent: AgentStatus; trades: Trade[]; competition: Competition | null; onClose: () => void }) {
+function AgentDrawer({ agent, trades, competition, placarFolded, onClose }: { agent: AgentStatus; trades: Trade[]; competition: Competition | null; placarFolded: boolean; onClose: () => void }) {
   const group = groupOf(agent.agent_id);
   const style = GROUP_STYLE[group];
   const row = competition?.placar.find((r) => r.agente === agent.agent_id);
@@ -155,7 +199,7 @@ function AgentDrawer({ agent, trades, competition, onClose }: { agent: AgentStat
   const total = closed.reduce((s, t) => s + (Number(t.profit_usd) || 0), 0);
   const wins = closed.filter((t) => Number(t.profit_usd) > 0).length;
   return (
-    <aside className={`pointer-events-auto absolute right-[350px] top-24 w-[360px] max-h-[calc(100vh-8rem)] overflow-y-auto p-4 ${card}`}>
+    <aside className={`pointer-events-auto absolute z-10 w-[360px] overflow-y-auto p-4 ${card} ${placarFolded ? 'right-4 top-[9.5rem] max-h-[calc(100vh-11rem)]' : 'right-[350px] top-24 max-h-[calc(100vh-8rem)]'}`}>
       <div className="flex items-start gap-3">
         <div className="h-10 w-10 rounded-xl grid place-items-center font-black text-slate-950" style={{ background: zoneColor(agent.sector) }}>#{rank || '–'}</div>
         <div className="flex-1">
