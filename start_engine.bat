@@ -11,6 +11,7 @@ start "RSI20" cmd /c start_rsi20.bat
 start "ORDERFLOW" cmd /c start_orderflow.bat
 start "V3" cmd /c start_v3.bat
 start "SYNC" cmd /c start_supabase_sync.bat
+start "REMOTE" cmd /c start_remote_control.bat
 REM 12/11: AGENTE_RSI7_H1 desligado (config/agente_rsi7_h1.yaml enabled=false)
 :loop
 echo [%date% %time%] Iniciando motor (DEMO, DRY_RUN=False)...
