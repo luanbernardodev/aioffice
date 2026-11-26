@@ -33,7 +33,22 @@ export interface CloseEvent {
   at: number;
 }
 
+/** Ponto do histórico do saldo (tabela account_history, escrita pelo sync). */
+export interface BalancePoint {
+  ts: string;
+  balance: number;
+  equity: number | null;
+  kind: 'deal' | 'snapshot';
+}
+
 const TRADES_SINCE = '2026-11-01T00:00:00Z';
+const SNAP_DAYS = 7; // fotos de saldo/equity a cada 10 min: últimos 7 dias (~1000 linhas, o teto da API)
+
+function mergePoints(prev: BalancePoint[], rows: BalancePoint[]): BalancePoint[] {
+  const m = new Map(prev.map((p) => [p.ts, p]));
+  rows.forEach((r) => m.set(r.ts, { ...r, balance: Number(r.balance), equity: r.equity == null ? null : Number(r.equity) }));
+  return [...m.values()].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+}
 
 export function useOffice() {
   const [agents, setAgents] = useState<AgentStatus[]>([]);
@@ -42,6 +57,7 @@ export function useOffice() {
   const [competition, setCompetition] = useState<Competition | null>(null);
   const [auditor, setAuditor] = useState<MarketContext | null>(null);
   const [events, setEvents] = useState<CloseEvent[]>([]);
+  const [balanceHistory, setBalanceHistory] = useState<BalancePoint[]>([]);
   const [connected, setConnected] = useState(false);
   const statusRef = useRef<Record<string, string>>({});
 
@@ -76,6 +92,15 @@ export function useOffice() {
     const comp = (cfg.data?.[0] as { agents_pnl?: { competicao?: Competition } } | undefined)?.agents_pnl?.competicao;
     if (comp) setCompetition(comp);
     if (mc.data?.length) setAuditor(mc.data[0] as MarketContext);
+    // histórico do saldo: todos os negócios + fotos recentes (tabela ausente -> gráfico mostra "aguardando")
+    const since = new Date(Date.now() - SNAP_DAYS * 86400000).toISOString();
+    const [deals, snaps] = await Promise.all([
+      supabase.from('account_history').select('*').eq('kind', 'deal').order('ts', { ascending: false }).limit(1000),
+      supabase.from('account_history').select('*').eq('kind', 'snapshot').gte('ts', since).order('ts', { ascending: false }).limit(1000),
+    ]);
+    if ((deals.data && deals.data.length) || (snaps.data && snaps.data.length)) {
+      setBalanceHistory(mergePoints([], [...((deals.data as BalancePoint[]) || []), ...((snaps.data as BalancePoint[]) || [])]));
+    }
   }, []);
 
   useEffect(() => {
@@ -114,6 +139,9 @@ export function useOffice() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'system_config' }, (p) => {
         const comp = (p.new as { agents_pnl?: { competicao?: Competition } })?.agents_pnl?.competicao;
         if (comp) setCompetition(comp);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'account_history' }, (p) => {
+        if (p.new && (p.new as BalancePoint).ts) setBalanceHistory((prev) => mergePoints(prev, [p.new as BalancePoint]));
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'market_context' }, (p) => {
         if (p.new) setAuditor(p.new as MarketContext);
@@ -161,5 +189,8 @@ export function useOffice() {
     ].slice(0, 30));
   }, []);
 
-  return { agents, trades, account, competition, auditor, events, connected, stats, recentCloses, simulateClose, refetch: fetchAll };
+  return {
+    agents, trades, account, competition, auditor, events, connected, stats, recentCloses, simulateClose, balanceHistory,
+    refetch: fetchAll,
+  };
 }

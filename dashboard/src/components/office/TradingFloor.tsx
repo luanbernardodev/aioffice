@@ -3,8 +3,8 @@
 import React, { useMemo } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { ContactShadows, Html, OrbitControls } from '@react-three/drei';
-import { AgentStatus, Trade } from '@/types';
-import { CloseEvent, Competition } from '@/hooks/useOffice';
+import { AgentStatus, MT5AccountStatus, Trade } from '@/types';
+import { BalancePoint, CloseEvent, Competition } from '@/hooks/useOffice';
 import { Trader } from './Trader';
 import * as THREE from 'three';
 import { ZONES, Zone, seatAgents, zoneRect, fmtUsd } from './layout';
@@ -14,6 +14,8 @@ interface FloorProps {
   stats: Record<string, { open?: Trade }>;
   competition: Competition | null;
   events: CloseEvent[];
+  balanceHistory: BalancePoint[];
+  account: MT5AccountStatus | null;
   selectedId: string | null;
   onSelect: (a: AgentStatus | null) => void;
 }
@@ -123,6 +125,155 @@ function ScoreWall({ competition }: { competition: Competition | null }) {
   );
 }
 
+/** Quadro da parede: curva do saldo (negócios + fotos de 10 min) e da equity, com o ponto ao vivo da conta. */
+function BalanceWall({ history, account }: { history: BalancePoint[]; account: MT5AccountStatus | null }) {
+  const texture = useMemo(() => {
+    const W = 1100;
+    const H = 520;
+    const c = document.createElement('canvas');
+    c.width = W;
+    c.height = H;
+    const g = c.getContext('2d')!;
+    const grd = g.createLinearGradient(0, 0, 0, H);
+    grd.addColorStop(0, '#08101f');
+    grd.addColorStop(1, '#050811');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, W, H);
+    g.textAlign = 'center';
+    g.fillStyle = '#7dd3fc';
+    g.font = '600 26px ui-monospace, Consolas, monospace';
+    g.fillText('S A L D O   D A   C O N T A', W / 2, 52);
+
+    const pts = history.map((p) => ({ t: new Date(p.ts).getTime(), b: Number(p.balance), e: p.equity == null ? null : Number(p.equity) }));
+    if (account?.balance != null) {
+      pts.push({ t: Date.now(), b: Number(account.balance), e: account.equity == null ? null : Number(account.equity) });
+    }
+    if (pts.length < 2) {
+      g.fillStyle = '#64748b';
+      g.font = '600 30px ui-monospace, Consolas, monospace';
+      g.fillText('aguardando histórico do saldo…', W / 2, H / 2 + 10);
+    } else {
+      const first = pts[0];
+      const last = pts[pts.length - 1];
+      const diff = last.b - first.b;
+      const col = diff > 0 ? '#6ee7b7' : diff < 0 ? '#fda4af' : '#94a3b8';
+      g.font = '900 64px ui-monospace, Consolas, monospace';
+      g.fillStyle = '#e2e8f0';
+      g.textAlign = 'right';
+      g.fillText(`$${last.b.toFixed(2)}`, W / 2 + 40, 126);
+      g.textAlign = 'left';
+      g.font = '700 34px ui-monospace, Consolas, monospace';
+      g.fillStyle = col;
+      const pct = first.b ? (diff / first.b) * 100 : 0;
+      g.fillText(`${fmtUsd(diff)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)`, W / 2 + 64, 122);
+
+      const L = 110;
+      const R = W - 50;
+      const T = 160;
+      const B = H - 60;
+      const vals = pts.flatMap((p) => (p.e == null ? [p.b] : [p.b, p.e]));
+      let lo = Math.min(...vals);
+      let hi = Math.max(...vals);
+      const pad = Math.max((hi - lo) * 0.08, 1);
+      lo -= pad;
+      hi += pad;
+      const t0 = first.t;
+      const t1 = Math.max(last.t, t0 + 1);
+      const X = (t: number) => L + ((t - t0) / (t1 - t0)) * (R - L);
+      const Y = (v: number) => B - ((v - lo) / (hi - lo)) * (B - T);
+      g.strokeStyle = 'rgba(148,163,184,0.12)';
+      g.lineWidth = 1;
+      g.font = '500 20px ui-monospace, Consolas, monospace';
+      g.fillStyle = '#64748b';
+      g.textAlign = 'right';
+      for (let i = 0; i <= 4; i++) {
+        const v = lo + ((hi - lo) * i) / 4;
+        const y = Y(v);
+        g.beginPath();
+        g.moveTo(L, y);
+        g.lineTo(R, y);
+        g.stroke();
+        g.fillText(`$${v.toFixed(0)}`, L - 12, y + 7);
+      }
+      g.textAlign = 'center';
+      const fmtD = (t: number) => new Date(t).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+      for (let i = 0; i <= 4; i++) {
+        const t = t0 + ((t1 - t0) * i) / 4;
+        g.fillText(fmtD(t), X(t), B + 34);
+      }
+      // saldo inicial (referência)
+      g.setLineDash([6, 8]);
+      g.strokeStyle = 'rgba(148,163,184,0.35)';
+      g.beginPath();
+      g.moveTo(L, Y(first.b));
+      g.lineTo(R, Y(first.b));
+      g.stroke();
+      g.setLineDash([]);
+      // saldo em degraus: só muda quando um negócio fecha
+      const line = new Path2D();
+      line.moveTo(X(pts[0].t), Y(pts[0].b));
+      for (let i = 1; i < pts.length; i++) {
+        line.lineTo(X(pts[i].t), Y(pts[i - 1].b));
+        line.lineTo(X(pts[i].t), Y(pts[i].b));
+      }
+      const area = new Path2D(line);
+      area.lineTo(X(last.t), B);
+      area.lineTo(X(pts[0].t), B);
+      area.closePath();
+      const fg = g.createLinearGradient(0, T, 0, B);
+      fg.addColorStop(0, 'rgba(56,189,248,0.28)');
+      fg.addColorStop(1, 'rgba(56,189,248,0)');
+      g.fillStyle = fg;
+      g.fill(area);
+      g.strokeStyle = '#38bdf8';
+      g.lineWidth = 4;
+      g.lineJoin = 'round';
+      g.stroke(line);
+      // equity (só onde há foto periódica)
+      const eq = pts.filter((p) => p.e != null);
+      if (eq.length > 1) {
+        g.strokeStyle = '#fbbf24';
+        g.lineWidth = 2.5;
+        g.beginPath();
+        eq.forEach((p, i) => (i ? g.lineTo(X(p.t), Y(p.e as number)) : g.moveTo(X(p.t), Y(p.e as number))));
+        g.stroke();
+      }
+      g.fillStyle = '#38bdf8';
+      g.beginPath();
+      g.arc(X(last.t), Y(last.b), 8, 0, Math.PI * 2);
+      g.fill();
+      g.font = '600 20px ui-monospace, Consolas, monospace';
+      g.textAlign = 'left';
+      g.fillStyle = '#38bdf8';
+      g.fillRect(L, 76, 26, 5);
+      g.fillText('saldo', L + 34, 86);
+      g.fillStyle = '#fbbf24';
+      g.fillRect(L, 100, 26, 4);
+      g.fillText('equity', L + 34, 110);
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 8;
+    return t;
+  }, [history, account]);
+  return (
+    <group position={[10.4, 0, -8.9]}>
+      <mesh position={[0, 3.1, 0]}>
+        <boxGeometry args={[8.8, 4.2, 0.15]} />
+        <meshStandardMaterial color="#05080f" metalness={0.5} roughness={0.4} />
+      </mesh>
+      <mesh position={[0, 3.1, 0.08]}>
+        <boxGeometry args={[9.0, 4.4, 0.02]} />
+        <meshStandardMaterial color="#38bdf8" emissive="#38bdf8" emissiveIntensity={0.6} transparent opacity={0.25} />
+      </mesh>
+      <mesh position={[0, 3.1, 0.1]}>
+        <planeGeometry args={[8.6, 4.07]} />
+        <meshBasicMaterial map={texture} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+}
+
 function ZoneSign({ zone, count, position }: { zone: Zone; count: number; position: [number, number, number] }) {
   const texture = useMemo(() => {
     const c = document.createElement('canvas');
@@ -157,7 +308,7 @@ function ZoneSign({ zone, count, position }: { zone: Zone; count: number; positi
   );
 }
 
-export default function TradingFloor({ agents, stats, competition, events, selectedId, onSelect }: FloorProps) {
+export default function TradingFloor({ agents, stats, competition, events, balanceHistory, account, selectedId, onSelect }: FloorProps) {
   const seats = useMemo(() => seatAgents(agents), [agents]);
   const ranks = useMemo(() => {
     const m: Record<string, { rank: number; pnl: number }> = {};
@@ -252,6 +403,7 @@ export default function TradingFloor({ agents, stats, competition, events, selec
       })}
 
       <ScoreWall competition={competition} />
+      <BalanceWall history={balanceHistory} account={account} />
       <Rack position={[-21.6, 0, -7.6]} />
       <Rack position={[-20.4, 0, -7.6]} />
       <Plant position={[-21.8, 0, 8.4]} />

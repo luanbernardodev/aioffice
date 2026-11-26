@@ -57,6 +57,8 @@ export default function DashboardPage() {
           stats={office.stats}
           competition={office.competition}
           events={office.events}
+          balanceHistory={office.balanceHistory}
+          account={office.account}
           selectedId={current?.agent_id ?? null}
           onSelect={setSelected}
         />

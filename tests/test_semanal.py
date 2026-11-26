@@ -95,3 +95,17 @@ def test_resumo_local_says_nothing_changed():
                          "fwd_liquido": -3.0, "real_comp_n": 2, "real_comp_liquido": -1.0}])
     txt = resumo_local({"ticks": [{"simbolo": "GOLD", "ticks_novos": 10}], "orderflow": {"dias_novos": 2}}, rev, None)
     assert "x: ALERTA" in txt and "Nada foi alterado" in txt and "GOLD +10" in txt
+
+
+def test_lock_released_even_when_run_fails(tmp_path, monkeypatch):
+    import sys
+
+    import pytest
+
+    from backtest.semanal import run
+    monkeypatch.setattr(run, "LOCK", tmp_path / "x.lock")
+    monkeypatch.setattr(sys, "argv", ["run", "--sem-telegram"])
+    monkeypatch.setattr(run, "_executar", lambda args: (_ for _ in ()).throw(ImportError("sem numba")))
+    with pytest.raises(ImportError):
+        run.main()
+    assert not (tmp_path / "x.lock").exists()                 # a próxima execução não fica bloqueada

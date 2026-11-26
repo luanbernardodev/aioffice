@@ -141,6 +141,13 @@ def main() -> int:
     if not _lock():
         log.error("outra execução do backtest semanal está em andamento (%s)", LOCK)
         return 2
+    try:
+        return _executar(args)
+    finally:
+        LOCK.unlink(missing_ok=True)                          # sempre libera, mesmo com erro
+
+
+def _executar(args) -> int:
     import agents.auditor_mt5 as AUD
     from backtest.semanal import dados as D, grade as G, revalidar as R
     pasta = REPORTS / f"{datetime.now():%Y-%m-%d}"
@@ -191,7 +198,6 @@ def main() -> int:
     print(msg)
     if not args.sem_telegram:
         AUD.send_telegram("🧪 BACKTEST SEMANAL\n" + msg)
-    LOCK.unlink(missing_ok=True)
     return 0
 
 

@@ -146,3 +146,30 @@ def test_auditor_never_pushes_to_supabase_under_pytest(monkeypatch):
     monkeypatch.setattr("agents.supabase_sync.push_auditor_analysis", lambda *a, **k: called.append(a))
     aud.push_to_panel("STATUS: OK")
     assert called == []
+
+
+def test_balance_history_anchored_on_current_balance(sync):
+    rows = sync.balance_history(sync.mt5.account_info())
+    deals = [r for r in rows if r["kind"] == "deal"]
+    # -10 (GOLD, 02h) e depois +5 -9 -7 no mesmo segundo (16h): um ponto por instante, terminando no saldo 100
+    assert [r["balance"] for r in deals] == [111.0, 100.0]
+    snap = next(r for r in rows if r["kind"] == "snapshot")
+    assert snap["balance"] == 100.0 and snap["equity"] == 98.5
+    assert len({r["ts"] for r in rows}) == len(rows)                          # chave única (ts)
+
+
+def test_history_pushed_every_10_min_and_survives_missing_table(sync):
+    sync.step()
+    posts = [c for c in sync.s.calls if c[0] == "POST" and c[1].startswith("account_history")]
+    assert len(posts) == 1 and "on_conflict=ts" in posts[0][1]
+
+    class Missing(FakeSession):
+        def request(self, method, url, headers=None, data=None, timeout=None):
+            if "account_history" in url:
+                return FakeResp(404, '{"code":"PGRST205"}')
+            return super().request(method, url, headers, data, timeout)
+
+    s2 = SupabaseSync(FakeMT5(DEALS, OPEN), sync.cfg, "https://x.supabase.co", "k", session=Missing(),
+                      clock=lambda: datetime(2026, 11, 20, 18, 0, tzinfo=timezone.utc))
+    assert s2.step()["agentes"] > 0                                           # o resto do painel segue
+    assert s2.hist_next == datetime(2026, 11, 20, 19, 0, tzinfo=timezone.utc)  # nova tentativa em 1 h

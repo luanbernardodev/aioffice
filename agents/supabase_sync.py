@@ -7,6 +7,9 @@ A cada ciclo (padrão 20 s), com a chave secreta do .env (nunca vai para o naveg
   trades_history      trades dos agentes ativos desde SYNC_START: posição aberta entra como OPEN e vira CLOSED ao
                       fechar -> é o EVENTO que o painel usa para animar a plaquinha
   mt5_account_status  conta (id 1) · system_config (id 1): ativos atuais e o placar da competição em agents_pnl
+  account_history     a cada HIST_EVERY: curva do saldo (1 ponto por negócio que muda o saldo, desde o início da
+                      conta, ancorada no saldo atual) + foto de saldo/equity. Tabela criada por
+                      supabase/sql/20261126_historico_saldo_e_rls.sql; se ainda não existir, o resto segue normal.
 Mapeamento de agentes igual ao do auditor (magic + comentário da entrada para engine A2/A3/A4).
 Só envia o que mudou (cache por linha), para não inundar o Realtime.
 """
@@ -30,6 +33,8 @@ log = logging.getLogger("agents.supabase_sync")
 SYNC_START = datetime(2026, 11, 1, tzinfo=timezone.utc)
 SECTOR = {"GOLD": 1, "US500Cash": 2, "BTCUSD": 3}
 REASON = {4: "SL_HIT", 5: "TP_HIT", 3: "EXPERT", 0: "MANUAL"}
+HIST_EVERY = timedelta(minutes=10)
+HIST_RETRY = timedelta(hours=1)          # tabela ausente: tenta de novo depois (até o SQL ser aplicado)
 
 
 def group_of(name: str) -> str:
@@ -71,6 +76,7 @@ class SupabaseSync:
         self.server_time = cfg["account"].get("server_time", "ny_plus_7")
         self.sent: Dict[str, str] = {}
         self.legacy_cleaned = False
+        self.hist_next: Optional[datetime] = None
 
     # ------------------------------------------------------------ REST
     def _req(self, method: str, table: str, params: str = "", body: Any = None, prefer: str = "") -> Any:
@@ -155,6 +161,42 @@ class SupabaseSync:
                          "dry_run": False, "execution_account": "DEMO",
                          "technical_rationale": str(getattr(p, "comment", ""))[:120]})
         return rows
+
+    # ------------------------------------------------------------ histórico do saldo
+    def balance_history(self, acc: Any) -> List[Dict[str, Any]]:
+        """Saldo depois de cada negócio que o altera (trade, swap, comissão, depósito), ancorado no saldo atual."""
+        now = self.clock()
+        deals = list(self.mt5.history_deals_get(datetime(2020, 1, 1), now.replace(tzinfo=None) + timedelta(days=1)) or [])
+        deals.sort(key=lambda d: (int(getattr(d, "time_msc", 0) or int(d.time) * 1000), int(getattr(d, "ticket", 0))))
+        pts, cum = [], 0.0
+        for d in deals:
+            delta = float(d.profit) + float(d.swap) + float(d.commission) + float(getattr(d, "fee", 0.0) or 0.0)
+            if abs(delta) < 1e-9:
+                continue
+            cum += delta
+            pts.append((self.utc(int(d.time)), cum))
+        off = float(acc.balance) - cum            # histórico parcial no terminal: ancora o último ponto no saldo real
+        by_ts: Dict[str, Dict[str, Any]] = {}
+        for t, b in pts:
+            by_ts[t.isoformat()] = {"ts": t.isoformat(), "balance": round(b + off, 2), "equity": None, "kind": "deal"}
+        snap = now.replace(second=0, microsecond=0)
+        by_ts[snap.isoformat()] = {"ts": snap.isoformat(), "balance": round(float(acc.balance), 2),
+                                   "equity": round(float(acc.equity), 2), "kind": "snapshot"}
+        return list(by_ts.values())
+
+    def push_history(self, acc: Any) -> int:
+        now = self.clock()
+        if self.hist_next and now < self.hist_next:
+            return 0
+        try:
+            n = self.upsert("account_history", self.balance_history(acc), "ts")
+            self.hist_next = now + HIST_EVERY
+            return n
+        except RuntimeError as exc:
+            log.warning("account_history indisponível (%s); tenta de novo em 1 h. Aplique "
+                        "supabase/sql/20261126_historico_saldo_e_rls.sql no SQL Editor.", str(exc)[:160])
+            self.hist_next = now + HIST_RETRY
+            return 0
 
     # ------------------------------------------------------------ agregados
     def build_agents(self, roster: Dict[str, Dict[str, Any]], trades: List[Dict[str, Any]],
@@ -242,6 +284,7 @@ class SupabaseSync:
             "agents_pnl": {"competicao": comp, "agentes_ativos": len(roster)},
             "balance": float(acc.balance), "equity": float(acc.equity), "margin_free": float(acc.margin_free),
             "updated_at": now}], "id")
+        self.push_history(acc)
         return {"trades": n_tr, "agentes": n_ag}
 
 
