@@ -113,3 +113,19 @@ Agendamento a cada 4 horas, na sessão interativa (necessário para falar com o 
 schtasks /create /tn "AuditorMT5" /sc hourly /mo 4 /it /tr "C:\Users\Administrator\Desktop\aioffice\start_auditor.bat"
 ```
 Log: `logs/auditor.log`. Se o MT5 não responder, o auditor envia um alerta CRÍTICO ao Telegram.
+
+## 🧪 Backtest semanal programado (VPS, sábado 10:00)
+
+`run_backtest_semanal.bat` → `python -m backtest.semanal.run`, com prioridade baixa. **Só relata; não altera agentes.**
+
+1. **Dados:** acrescenta ticks (GOLD, BTCUSD), barras M5/M15/H1 do MT5 e os aggTrades diários da Binance desde a última execução.
+2. **Revalidação:** roda a configuração atual dos agentes ligados e compara histórico, forward (dados novos) e resultado real no MT5. As regras ficam em `backtest/semanal/revalidar.py`.
+3. **Grade:** roda a grade v8 com os dados novos (até 8 h). Uma estratégia só vira candidata se passar no OOS, com as regras fixas de `backtest/semanal/grade.py`.
+4. **Relatório:** o Claude Code analisa em modo só leitura e o resultado vai para o Telegram. Os arquivos ficam em `reports/semanal/AAAA-MM-DD/`.
+
+### Instalação única na VPS
+
+1. **Dados-base.** No PC, rode `python -m tools.empacotar_dados_vps`. Copie `data/dados_backtest_vps.zip` para a VPS e extraia na pasta do projeto.
+2. **Claude Code.** No PowerShell, rode `irm https://claude.ai/install.ps1 | iex`. Depois rode `claude` uma vez e faça o login.
+3. **Agendamento.** Rode `tools\agendar_backtest_semanal.bat` como Administrador.
+4. **Teste rápido.** Rode `run_backtest_semanal.bat --sem-grade`.

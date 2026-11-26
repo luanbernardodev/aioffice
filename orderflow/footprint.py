@@ -43,6 +43,15 @@ def fp_buy(q: np.ndarray, sell: np.ndarray) -> np.ndarray:
 def build(sym: str = "BTCUSDT", bucket: float = 10.0, files: List[Path] | None = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     files = files or sorted(RAW_DIR.glob(f"{sym}-aggTrades-*.zip"))
+    bars_h, fp = aggregate(files, bucket)
+    tag = f"{bucket:g}"
+    bars_h.to_pickle(OUT_DIR / f"{sym}_bars_H1.pkl")
+    fp.to_pickle(OUT_DIR / f"{sym}_fp_H1_b{tag}.pkl")
+    return bars_h, fp
+
+
+def aggregate(files: List[Path], bucket: float = 10.0) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Barras H1 e footprint dos arquivos dados, sem gravar (usado também na atualização incremental semanal)."""
     fps, bars, seq = [], [], 0
     for path in files:
         n = 0
@@ -58,10 +67,7 @@ def build(sym: str = "BTCUSDT", bucket: float = 10.0, files: List[Path] | None =
     bars_h = b.groupby("hour").agg(open=("open", "first"), high=("high", "max"), low=("low", "min"),
                                    close=("close", "last"), buy=("buy", "sum"), sell=("sell", "sum"),
                                    trades=("trades", "sum")).reset_index()
-    tag = f"{bucket:g}"
-    bars_h.to_pickle(OUT_DIR / f"{sym}_bars_H1.pkl")
-    fp.reset_index(drop=True).to_pickle(OUT_DIR / f"{sym}_fp_H1_b{tag}.pkl")
-    return bars_h, fp
+    return bars_h, fp.reset_index(drop=True)
 
 
 def load(sym: str = "BTCUSDT", bucket: float = 10.0) -> Tuple[pd.DataFrame, pd.DataFrame]:

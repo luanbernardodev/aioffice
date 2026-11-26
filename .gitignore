@@ -17,3 +17,7 @@ backtest/agentes_v3/grid7_candidatos.pkl
 backtest/agentes_v3/grid8_candidatos.pkl
 backtest/agentes_v3/grid9_stops.pkl
 backups/supabase_*.json
+
+# backtest semanal (gerado na VPS)
+reports/semanal/
+logs/backtest_semanal.lock

@@ -11,3 +11,4 @@ tzdata
 pyyaml
 pytest
 websockets>=12
+numba
