@@ -94,10 +94,16 @@ class SupabaseSync:
                 fresh.append((ident, digest, row))
         if not fresh:
             return 0
-        self._req("POST", table, f"on_conflict={key}", [r for _, _, r in fresh],
-                  prefer="resolution=merge-duplicates,return=minimal")
-        for ident, digest, _ in fresh:
-            self.sent[ident] = digest
+        # PostgREST exige as mesmas chaves em todas as linhas do lote (PGRST102): um lote por formato de linha.
+        # Ex.: posição aberta leva sl/tp, fechada não (o merge mantém o sl/tp já gravado).
+        batches: Dict[tuple, List[Any]] = {}
+        for item in fresh:
+            batches.setdefault(tuple(sorted(item[2])), []).append(item)
+        for items in batches.values():
+            self._req("POST", table, f"on_conflict={key}", [r for _, _, r in items],
+                      prefer="resolution=merge-duplicates,return=minimal")
+            for ident, digest, _ in items:
+                self.sent[ident] = digest
         return len(fresh)
 
     # ------------------------------------------------------------ MT5 (somente leitura)

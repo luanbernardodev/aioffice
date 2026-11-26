@@ -91,7 +91,7 @@ def test_step_writes_only_active_agents_and_real_trades(sync):
     assert a3["pnl"] == 5.0 and a3["total_pnl"] == 5.0 and a3["sector"] == 2 and a3["current_state"] == "IDLE"
     btc = next(a for a in ag if a["agent_id"] == "v4_btc_rsipb_h1")
     assert btc["current_state"] == "EXECUTING" and btc["sector"] == 3 and btc["strategy_type"] == "v4"
-    tr = next(c[2] for c in calls if c[0] == "POST" and c[1].startswith("trades_history"))
+    tr = [t for c in calls if c[0] == "POST" and c[1].startswith("trades_history") for t in c[2]]
     by = {t["ticket_mt5"]: t for t in tr}
     assert set(by) == {1, 4, 9}                                                             # sem legado e sem manual
     assert by[1]["status"] == "CLOSED" and by[1]["exit_reason"] == "TP_HIT" and by[1]["order_type"] == "SELL"
@@ -117,6 +117,16 @@ def test_position_close_is_an_update_of_the_same_ticket(sync):
     tr = [c[2] for c in sync.s.calls if c[0] == "POST" and c[1].startswith("trades_history")][-1]
     t9 = next(t for t in tr if t["ticket_mt5"] == 9)
     assert t9["status"] == "CLOSED" and t9["profit_usd"] == 5.0                            # o painel vê OPEN -> CLOSED
+
+
+def test_every_batch_has_uniform_keys(sync):
+    """PGRST102: num mesmo POST todas as linhas precisam das mesmas chaves (aberta tem sl/tp, fechada não)."""
+    sync.step()
+    posts = [c for c in sync.s.calls if c[0] == "POST" and isinstance(c[2], list)]
+    for _, table, rows, _ in posts:
+        assert len({tuple(sorted(r)) for r in rows}) == 1, table
+    sent = {t["ticket_mt5"] for _, table, rows, _ in posts if table.startswith("trades_history") for t in rows}
+    assert sent == {1, 4, 9}                                                                # nada se perdeu
 
 
 def test_push_auditor_analysis_flags_critical():
