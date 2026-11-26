@@ -94,13 +94,16 @@ export function useOffice() {
     if (mc.data?.length) setAuditor(mc.data[0] as MarketContext);
     // histórico do saldo: todos os negócios + fotos recentes (tabela ausente -> gráfico mostra "aguardando")
     const since = new Date(Date.now() - SNAP_DAYS * 86400000).toISOString();
-    const [deals, snaps] = await Promise.all([
-      supabase.from('account_history').select('*').eq('kind', 'deal').order('ts', { ascending: false }).limit(1000),
+    // a partir de 01/11 (mesmo período do painel): antes disso a demo teve trocas de capital (10 mil -> 1 mil -> 100)
+    const [deals, base, snaps] = await Promise.all([
+      supabase.from('account_history').select('*').eq('kind', 'deal').gte('ts', TRADES_SINCE).order('ts', { ascending: false }).limit(1000),
+      supabase.from('account_history').select('*').lt('ts', TRADES_SINCE).order('ts', { ascending: false }).limit(1),
       supabase.from('account_history').select('*').eq('kind', 'snapshot').gte('ts', since).order('ts', { ascending: false }).limit(1000),
     ]);
-    if ((deals.data && deals.data.length) || (snaps.data && snaps.data.length)) {
-      setBalanceHistory(mergePoints([], [...((deals.data as BalancePoint[]) || []), ...((snaps.data as BalancePoint[]) || [])]));
-    }
+    const rows = [...((deals.data as BalancePoint[]) || []), ...((snaps.data as BalancePoint[]) || [])];
+    const b0 = (base.data as BalancePoint[] | null)?.[0];
+    if (b0) rows.push({ ...b0, ts: TRADES_SINCE, equity: null, kind: 'deal' }); // saldo no início do período
+    if (rows.length) setBalanceHistory(mergePoints([], rows));
   }, []);
 
   useEffect(() => {
