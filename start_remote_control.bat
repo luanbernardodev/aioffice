@@ -5,9 +5,12 @@ REM Permissoes no modo padrao: cada comando/edicao pede aprovacao no celular (a 
 cd /d "%~dp0"
 set "CLAUDE=%USERPROFILE%\.local\bin\claude.exe"
 if not exist "%CLAUDE%" set "CLAUDE=claude"
+REM Remote Control exige a assinatura do claude.ai: sem a chave da API NESTA janela (o auditor continua usando a dele).
+set "ANTHROPIC_API_KEY="
+set "ANTHROPIC_AUTH_TOKEN="
 :loop
 echo [%date% %time%] Iniciando Remote Control...
-"%CLAUDE%" remote-control --name "VPS quant-office"
+"%CLAUDE%" remote-control --remote-control-session-name-prefix QuantOffice
 echo [%date% %time%] Remote Control encerrou (codigo %errorlevel%). Reiniciando em 30s...
 timeout /t 30 /nobreak >nul
 goto loop

@@ -68,8 +68,10 @@ def ask_claude(pasta: Path, anterior: Optional[Path]) -> Optional[str]:
            "--allowedTools", "Read", "Glob", "Grep",
            "--disallowedTools", "Bash", "PowerShell", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"]
     try:
+        # sem ANTHROPIC_API_KEY: usa a assinatura logada no Claude Code (a chave do .env/ambiente é do auditor)
+        env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
         r = subprocess.run(cmd, input=prompt, cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
-                           timeout=CLAUDE_TIMEOUT_S)
+                           timeout=CLAUDE_TIMEOUT_S, env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         log.error("Claude Code falhou: %s", exc)
         return None
